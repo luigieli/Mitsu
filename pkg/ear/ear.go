@@ -1,7 +1,6 @@
 package ear
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/abadojack/whatlanggo"
 	"github.com/maxhawkins/go-webrtcvad"
 )
 
@@ -27,18 +27,36 @@ type Ear struct {
 }
 
 func (e *Ear) ApplyFuzzyNameCorrection(text string) string {
-	cleanText := strings.ReplaceAll(text, ",", "")
-	cleanText = strings.ReplaceAll(cleanText, "!", "")
-	cleanText = strings.ReplaceAll(cleanText, "?", "")
+	misspelled := map[string]bool{
+		"mitzo": true, "mitso": true, "metso": true, "metsu": true, "mitsu": true, "mitzu": true,
+	}
+	words := strings.Split(text, " ")
+	for i, word := range words {
+		if word == "" {
+			continue
+		}
+		// Find core word without surrounding punctuation
+		start := 0
+		for start < len(word) && isPunct(word[start]) {
+			start++
+		}
+		end := len(word)
+		for end > start && isPunct(word[end-1]) {
+			end--
+		}
 
-	variations := []string{"mitzo", "mitso", "metso", "metsu", "mitsu", "mitzu"}
-	lowerText := strings.ToLower(cleanText)
-	for _, v := range variations {
-		if idx := strings.Index(lowerText, v); idx != -1 {
-			return cleanText[:idx] + "Mitsu" + cleanText[idx+len(v):]
+		if start < end {
+			core := strings.ToLower(word[start:end])
+			if misspelled[core] {
+				words[i] = word[:start] + "Mitsu" + word[end:]
+			}
 		}
 	}
-	return cleanText
+	return strings.Join(words, " ")
+}
+
+func isPunct(b byte) bool {
+	return b == ',' || b == '.' || b == '!' || b == '?' || b == '"' || b == '\'' || b == '(' || b == ')'
 }
 
 func (e *Ear) Start(ctx context.Context) {
@@ -157,21 +175,18 @@ func (e *Ear) transcribe(ctx context.Context, audioData []byte) {
 	defer os.Remove(wavFile)
 
 	whisperCmd := exec.CommandContext(ctx, "./whisper-cpp", "-m", e.WhisperModel, "-f", wavFile, "-nt", "-np", "-l", "auto", "-bs", "1", "-t", "4")
-	var stderr bytes.Buffer
-	whisperCmd.Stderr = &stderr
-	out, _ := whisperCmd.Output()
-
-	detectedLang := "en" // Default
-	stderrStr := stderr.String()
-	if strings.Contains(stderrStr, "auto-detected language: pt") {
-		detectedLang = "pt"
-	} else if strings.Contains(stderrStr, "auto-detected language: en") {
-		detectedLang = "en"
-	}
-
+	out, _ := whisperCmd.CombinedOutput()
 	text := strings.TrimSpace(string(out))
+
 	if text != "" && !strings.HasPrefix(text, "[") {
 		text = e.ApplyFuzzyNameCorrection(text)
+
+		// Detect language using whatlanggo
+		info := whatlanggo.Detect(text)
+		detectedLang := "en"
+		if info.Lang == whatlanggo.Por {
+			detectedLang = "pt"
+		}
 
 		fmt.Printf("Captured (%s): %s\n", detectedLang, text)
 		msg, _ := json.Marshal(map[string]string{"text": text, "type": "mic"})

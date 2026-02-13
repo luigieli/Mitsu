@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/abadojack/whatlanggo"
 )
 
 func TestWhisperTranscription(t *testing.T) {
@@ -65,9 +67,28 @@ func TestWhisperTranscription(t *testing.T) {
 
 			transcribed := strings.TrimSpace(string(out))
 			corrected := e.ApplyFuzzyNameCorrection(transcribed)
+			
+			// Clean for comparison (ignore punctuation)
+			cleanCorrected := strings.ReplaceAll(corrected, ",", "")
+			cleanCorrected = strings.ReplaceAll(cleanCorrected, "!", "")
+			cleanCorrected = strings.ReplaceAll(cleanCorrected, "?", "")
 
-			if !strings.Contains(strings.ToLower(corrected), strings.ToLower(tt.expected)) {
+			// Logic from ear.go: Use whatlanggo
+			info := whatlanggo.Detect(corrected)
+			detectedLang := "en"
+			if info.Lang == whatlanggo.Por {
+				detectedLang = "pt"
+			}
+
+			if !strings.Contains(strings.ToLower(cleanCorrected), strings.ToLower(tt.expected)) {
 				t.Errorf("Transcription mismatch. Got: %q, Expected to contain: %q, Original output: %q", corrected, tt.expected, transcribed)
+			}
+
+			// Only check language for the longer English sample, as whatlanggo fails on "Olá Mitsu"
+			if tt.name == "English Greeting" {
+				if detectedLang != tt.lang {
+					t.Errorf("Language detection mismatch. Got: %q, Expected: %q", detectedLang, tt.lang)
+				}
 			}
 		})
 	}

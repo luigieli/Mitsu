@@ -10,9 +10,10 @@ func TestApplyFuzzyNameCorrection(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"Hello mitzo", "Hello Mitsu"},
+		{"Hello mitzo!", "Hello Mitsu!"},
+		{"Hello, mitzo!", "Hello, Mitsu!"},
 		{"mitso is here", "Mitsu is here"},
-		{"metsu is cool", "Mitsu is cool"},
+		{"metsu?", "Mitsu?"},
 		{"I like mitsu", "I like Mitsu"},
 		{"nothing to change", "nothing to change"},
 	}
