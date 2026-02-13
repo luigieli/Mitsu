@@ -67,6 +67,12 @@ monitor:
 	@echo "Routing Mitsu's output to your speakers..."
 	pactl load-module module-loopback source=VirtualMic.monitor sink=@DEFAULT_SINK@ 2>/dev/null || true
 
+test:
+	@echo "Running Go tests..."
+	go test -v ./...
+	@echo "Running Python tests..."
+	python3 tests/test_voice_lab.py
+
 help:
 	@echo "Available targets:"
 	@echo "  make run-pt      - Run Mitsu in Portuguese mode"
