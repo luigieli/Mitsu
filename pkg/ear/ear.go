@@ -91,11 +91,18 @@ func (e *Ear) Start(ctx context.Context) {
 				stdout, _ = cmd.StdoutPipe()
 				e.TestInput = "" // Run once
 			} else {
-				args := []string{"--format=s16le", "--channels=1", "--rate=16000", "--property=application.name=Mitsu_Ear"}
-				if e.InputDevice != "" {
-					args = append(args, "-d", e.InputDevice)
+				// FFmpeg Front-End: Capture and Clean before Go VAD
+				args := []string{
+					"-f", "pulse", "-name", "Mitsu_Ear", "-i", "default",
+					"-ar", "16000", "-ac", "1",
+					"-af", "highpass=f=200,lowpass=f=3000",
+					"-f", "s16le", "pipe:1",
+					"-v", "error",
 				}
-				cmd = exec.CommandContext(ctx, "parec", args...)
+				if e.InputDevice != "" {
+					args[5] = e.InputDevice
+				}
+				cmd = exec.CommandContext(ctx, "ffmpeg", args...)
 				stdout, _ = cmd.StdoutPipe()
 			}
 
