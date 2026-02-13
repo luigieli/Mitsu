@@ -1,0 +1,47 @@
+services:
+  # Service 1: The Brain (Ollama)
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ./ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "988"
+    environment:
+      - OLLAMA_VULKAN=1
+
+  # Service 2: The Voice (Kokoro TTS API)
+  kokoro:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    ports:
+      - "8880:8880"
+
+  # Service 3: The Companion (Go App)
+  companion:
+    build:
+      context: .
+    depends_on:
+      - ollama
+      - kokoro
+    ports:
+      - "8080:8080"
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "988"
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - KOKORO_HOST=http://kokoro:8880
+      - PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native
+      - PULSE_COOKIE=/run/user/1000/pulse/cookie
+      - MITSU_LANG=${MITSU_LANG:-en}
+      - GGML_VULKAN_DEVICE=0
+    volumes:
+      - ${XDG_RUNTIME_DIR}/pulse/native:${XDG_RUNTIME_DIR}/pulse/native
+      - ${HOME}/.config/pulse/cookie:/run/user/1000/pulse/cookie
+      - ./voice_config.json:/app/voice_config.json # Map the tuning lab config
+    user: "${UID}:${GID}"
+    command: ["sh", "-c", "./companion -lang=${MITSU_LANG}"]
