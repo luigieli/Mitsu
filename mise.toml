@@ -1,0 +1,10 @@
+[tools]
+python = "3.11"
+uv = "latest"
+
+[env]
+PYTHONPATH = "."
+
+[tasks.lab]
+description = "Run the Mitsu Voice Tuning Lab"
+run = "uv run --with flask --with requests voice_lab.py"

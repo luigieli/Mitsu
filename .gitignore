@@ -1,0 +1,6 @@
+models/
+kokoro_data/
+ollama_data/
+*.bin
+*.onnx
+*.onnx.json
