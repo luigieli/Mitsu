@@ -63,7 +63,8 @@ func (m *Mouth) Start(ctx context.Context) {
 
 	pr, pw := io.Pipe()
 
-	// Persistent playback process
+	// Persistent playback process using pacat
+	// This ensures a fixed node in qpwgraph
 	var playbackCmd *exec.Cmd
 	if m.TestOutput != "" {
 		fmt.Printf("Mouth: Running in test mode, saving output to %s\n", m.TestOutput)
@@ -71,11 +72,11 @@ func (m *Mouth) Start(ctx context.Context) {
 			"-f", "s16le", "-ar", "24000", "-ac", "1", "-i", "pipe:0",
 			m.TestOutput)
 	} else {
-		args := []string{"-f", "s16le", "-ar", "24000", "-ac", "1", "-i", "pipe:0", "-f", "pulse"}
+		args := []string{"--playback", "--format=s16le", "--channels=1", "--rate=24000", "--property=application.name=Mitsu_Mouth"}
 		if m.OutputDevice != "" {
-			args = append(args, "-device", m.OutputDevice)
+			args = append(args, "-d", m.OutputDevice)
 		}
-		playbackCmd = exec.CommandContext(ctx, "ffmpeg", args...)
+		playbackCmd = exec.CommandContext(ctx, "pacat", args...)
 	}
 	
 	playbackCmd.Stdin = pr
@@ -93,18 +94,18 @@ func (m *Mouth) Start(ctx context.Context) {
 
 			m.IsMitsuSpeaking.Store(true)
 
-			voice := m.ActiveConfig.VoiceModel
-			langCode := m.ActiveConfig.LangCode
-			if m.CurrentLang == "en" && voice == "mitsu_custom" {
-				voice = m.KokoroVoiceAmy
-				langCode = "a"
+			voice := "mitsu_anime_en"
+			langCode := "a"
+			if m.CurrentLang == "pt" {
+				voice = "mitsu_anime_pt"
+				langCode = "p"
 			}
 
 			reqBody, _ := json.Marshal(map[string]interface{}{
 				"input":     sentence,
 				"voice":     voice,
 				"lang_code": langCode,
-				"speed":     1.0,
+				"speed":     1.1, // Faster = Cuter
 				"model":     "kokoro",
 			})
 

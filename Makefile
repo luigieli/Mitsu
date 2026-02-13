@@ -35,10 +35,10 @@ check-binaries:
 up:
 	@echo "Starting services [LANG=$(MITSU_LANG)]..."
 	docker-compose up -d
-	@echo "Generating custom voice blend..."
+	@echo "Generating custom anime voice blends..."
 	@sleep 5
-	@docker-compose cp blend_mitsu.py kokoro:/app/blend_mitsu.py
-	@docker-compose exec -T kokoro python3 /app/blend_mitsu.py
+	@docker-compose cp blend_anime.py kokoro:/app/blend_anime.py
+	@docker-compose exec -T kokoro python3 /app/blend_anime.py
 
 down:
 	@echo "Stopping services..."
