@@ -68,8 +68,10 @@ monitor:
 	pactl load-module module-loopback source=VirtualMic.monitor sink=@DEFAULT_SINK@ 2>/dev/null || true
 
 test:
-	@echo "Running Go tests..."
-	go test -v ./...
+	@echo "Running Go unit tests..."
+	go test -v ./pkg/...
+	@echo "Running Go E2E tests..."
+	go test -v ./e2e/...
 	@echo "Running Python tests..."
 	python3 tests/test_voice_lab.py
 

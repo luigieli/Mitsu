@@ -15,3 +15,4 @@
 - [ ] **Voice Blending**: Experiment further with voice blending techniques.
 - [ ] **Kokoro Verification**: Verify if voices are correctly loaded into Kokoro.
 - [ ] **MCPS Integration**: Investigate potential usage of Minecraft Protocol Support (MCPS).
+- [x] **Testing Suite**: Implemented unit tests for packages and E2E tests using Testcontainers.
