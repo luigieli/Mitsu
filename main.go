@@ -56,7 +56,7 @@ type VoiceConfig struct {
 var activeVoiceConfig VoiceConfig
 
 const (
-	WhisperModel   = "models/ggml-small.bin"
+	WhisperModel   = "models/ggml-small-q5_1.bin"
 	OllamaModel    = "mitsu"
 	KokoroVoiceAmy = "af_heart"
 )
@@ -200,7 +200,7 @@ func earRoutine(ctx context.Context, speechToBrain SpeechText, uiMessages chan s
 			wavFile := "/tmp/phrase.wav"
 			exec.Command("ffmpeg", "-y", "-f", "s16le", "-ar", "16000", "-ac", "1", "-i", tempFile, wavFile).Run()
 
-			whisperCmd := exec.CommandContext(ctx, "./whisper-cpp", "-m", WhisperModel, "-f", wavFile, "-nt", "-np", "-nth", "0.1", "-l", currentLang, "-ng")
+			whisperCmd := exec.CommandContext(ctx, "./whisper-cpp", "-m", WhisperModel, "-f", wavFile, "-nt", "-np", "-l", currentLang, "-bs", "1", "-t", "4", "-ngl", "100")
 			out, _ := whisperCmd.CombinedOutput()
 			text := strings.TrimSpace(string(out))
 			if text != "" && !strings.HasPrefix(text, "[") {
