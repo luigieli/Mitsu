@@ -209,9 +209,10 @@ func startWebServer(speechToBrain common.SpeechText, b *Broker) {
 		text := r.URL.Query().Get("text")
 		if text != "" {
 			speechToBrain <- common.SpeechEntry{
-				Text:     text,
-				Language: "en", // Default for web text input
+				Text:      text,
+				Language:  "en", // Default for web text input
 				Timestamp: time.Now(),
+				Profile:   common.NewProfile(),
 			}
 			fmt.Fprint(w, "OK")
 		}

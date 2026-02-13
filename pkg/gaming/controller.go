@@ -48,12 +48,10 @@ func (g *GameController) Start(ctx context.Context) {
 			}
 
 			if g.conn == nil {
-				fmt.Printf("Attempting to connect to mGBA at %s...
-", g.Address)
+				fmt.Printf("Attempting to connect to mGBA at %s...\n", g.Address)
 				conn, err := net.DialTimeout("tcp", g.Address, 2*time.Second)
 				if err != nil {
-					fmt.Printf("Gaming Bridge not found: %v. Retrying in 5s...
-", err)
+					fmt.Printf("Gaming Bridge not found: %v. Retrying in 5s...\n", err)
 					time.Sleep(5 * time.Second)
 					continue
 				}
@@ -66,8 +64,7 @@ func (g *GameController) Start(ctx context.Context) {
 			select {
 			case cmd := <-g.CommandChan:
 				if g.conn != nil {
-					fmt.Fprintf(g.conn, "%s
-", cmd)
+					fmt.Fprintf(g.conn, "%s\n", cmd)
 				}
 			case <-time.After(100 * time.Millisecond):
 				// Just loop
@@ -83,11 +80,9 @@ func (g *GameController) readLoop(ctx context.Context) {
 			return
 		}
 
-		line, err := reader.ReadString('
-')
+		line, err := reader.ReadString('\n')
 		if err != nil {
-			fmt.Printf("Gaming Bridge connection lost: %v
-", err)
+			fmt.Printf("Gaming Bridge connection lost: %v\n", err)
 			g.conn = nil
 			return
 		}

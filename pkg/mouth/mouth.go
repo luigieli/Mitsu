@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/abadojack/whatlanggo"
 )
@@ -98,12 +99,19 @@ func (m *Mouth) Start(ctx context.Context) {
 			detectedLang := "en"
 			if info.Lang == whatlanggo.Por {
 				detectedLang = "pt"
+			} else if info.Lang == whatlanggo.Eng {
+				detectedLang = "en"
+			} else {
+				// Fallback to input language if unsure
+				detectedLang = entry.InputLanguage
 			}
 
 			// Consistency Hack: If response is short, trust the input language
 			if len(strings.Split(sentence, " ")) < 5 {
 				detectedLang = entry.InputLanguage
 			}
+
+			fmt.Printf("Mouth: Detected response language: %s (Input was: %s)\n", detectedLang, entry.InputLanguage)
 
 			// 2. Select the correct Voice and LangCode
 			voice := "mitsu_anime_en"
@@ -121,15 +129,18 @@ func (m *Mouth) Start(ctx context.Context) {
 				"model":     "kokoro",
 			})
 
+			ttsStart := time.Now()
 			resp, err := http.Post(m.KokoroURL+"/v1/audio/speech", "application/json", bytes.NewBuffer(reqBody))
 			if err != nil {
 				fmt.Printf("Kokoro Error: %v\n", err)
 				m.IsMitsuSpeaking.Store(false)
 				continue
 			}
+			entry.Profile.AddSpan("TTS", time.Since(ttsStart))
 
 			filterChain := m.BuildFilterChain(m.ActiveConfig)
 
+			audioStart := time.Now()
 			convCmd := exec.CommandContext(ctx, "ffmpeg", "-i", "pipe:0", "-af", filterChain, "-f", "s16le", "-ar", "24000", "-ac", "1", "pipe:1")
 			convCmd.Stdin = resp.Body
 			stdout, _ := convCmd.StdoutPipe()
@@ -145,6 +156,7 @@ func (m *Mouth) Start(ctx context.Context) {
 			
 			convCmd.Wait()
 			resp.Body.Close()
+			entry.Profile.AddSpan("AudioPost", time.Since(audioStart))
 
 			if m.TestOutput != "" {
 				// In test mode, we want to close the pipe and wait for ffmpeg to finish
@@ -162,6 +174,7 @@ func (m *Mouth) Start(ctx context.Context) {
 
 			m.IsMitsuSpeaking.Store(false)
 			fmt.Println("Mouth finished sentence.")
+			fmt.Printf("[PROFILER] %s\n", entry.Profile.Summary())
 
 		case <-ctx.Done():
 			pw.Close()

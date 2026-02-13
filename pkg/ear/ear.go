@@ -117,7 +117,8 @@ func (e *Ear) Start(ctx context.Context) {
 							fmt.Printf("VAD: EOF reached while speaking. Forcing transcription. Buffer size: %d\n", len(speechBuffer))
 							finalBuffer := make([]byte, len(speechBuffer))
 							copy(finalBuffer, speechBuffer)
-							go e.transcribe(ctx, finalBuffer)
+							prof := common.NewProfile()
+							go e.transcribe(ctx, finalBuffer, prof)
 							isSpeaking = false
 						}
 					}
@@ -146,7 +147,8 @@ func (e *Ear) Start(ctx context.Context) {
 						if len(speechBuffer) > sampleRate*2 {
 							finalBuffer := make([]byte, len(speechBuffer))
 							copy(finalBuffer, speechBuffer)
-							go e.transcribe(ctx, finalBuffer)
+							prof := common.NewProfile()
+							go e.transcribe(ctx, finalBuffer, prof)
 						} else {
 							fmt.Println("VAD: Buffer too small, skipping transcription.")
 						}
@@ -165,7 +167,8 @@ func (e *Ear) Start(ctx context.Context) {
 	}
 }
 
-func (e *Ear) transcribe(ctx context.Context, audioData []byte) {
+func (e *Ear) transcribe(ctx context.Context, audioData []byte, prof *common.Profile) {
+	start := time.Now()
 	tempFile := fmt.Sprintf("/tmp/mitsu_audio_%d.raw", time.Now().UnixNano())
 	os.WriteFile(tempFile, audioData, 0644)
 	defer os.Remove(tempFile)
@@ -177,6 +180,8 @@ func (e *Ear) transcribe(ctx context.Context, audioData []byte) {
 	whisperCmd := exec.CommandContext(ctx, "./whisper-cpp", "-m", e.WhisperModel, "-f", wavFile, "-nt", "-np", "-l", "auto", "-bs", "1", "-t", "4")
 	out, _ := whisperCmd.CombinedOutput()
 	text := strings.TrimSpace(string(out))
+
+	prof.AddSpan("STT", time.Since(start))
 
 	if text != "" && !strings.HasPrefix(text, "[") {
 		text = e.ApplyFuzzyNameCorrection(text)
@@ -194,6 +199,6 @@ func (e *Ear) transcribe(ctx context.Context, audioData []byte) {
 		case e.UiMessages <- string(msg):
 		default:
 		}
-		e.SpeechToBrain <- common.SpeechEntry{Text: text, Language: detectedLang, Timestamp: time.Now()}
+		e.SpeechToBrain <- common.SpeechEntry{Text: text, Language: detectedLang, Timestamp: time.Now(), Profile: prof}
 	}
 }

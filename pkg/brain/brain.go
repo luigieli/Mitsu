@@ -71,7 +71,7 @@ func (b *Brain) Start() {
 			}
 
 			modelName := "mitsu-en"
-			if b.CurrentLang == "pt" {
+			if entry.Language == "pt" {
 				modelName = "mitsu-pt"
 			}
 
@@ -81,12 +81,15 @@ func (b *Brain) Start() {
 				Stream:   false,
 			})
 
+			brainStart := time.Now()
 			resp, err := http.Post(b.OllamaURL+"/api/chat", "application/json", bytes.NewBuffer(reqBody))
 			if err != nil {
 				continue
 			}
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
+
+			entry.Profile.AddSpan("Brain", time.Since(brainStart))
 
 			var ollamaResp OllamaChatResponse
 			if err := json.Unmarshal(body, &ollamaResp); err != nil {
@@ -105,6 +108,7 @@ func (b *Brain) Start() {
 			b.BrainToMouth <- common.LLMEntry{
 				Text:          responseText,
 				InputLanguage: entry.Language,
+				Profile:       entry.Profile,
 			}
 		}
 	}
