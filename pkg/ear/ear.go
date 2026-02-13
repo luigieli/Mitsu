@@ -22,14 +22,19 @@ type Ear struct {
 }
 
 func (e *Ear) ApplyFuzzyNameCorrection(text string) string {
+	// Remove common punctuation that might interfere with matching
+	cleanText := strings.ReplaceAll(text, ",", "")
+	cleanText = strings.ReplaceAll(cleanText, "!", "")
+	cleanText = strings.ReplaceAll(cleanText, "?", "")
+
 	variations := []string{"mitzo", "mitso", "metso", "metsu", "mitsu", "mitzu"}
-	lowerText := strings.ToLower(text)
+	lowerText := strings.ToLower(cleanText)
 	for _, v := range variations {
 		if idx := strings.Index(lowerText, v); idx != -1 {
-			return text[:idx] + "Mitsu" + text[idx+len(v):]
+			return cleanText[:idx] + "Mitsu" + cleanText[idx+len(v):]
 		}
 	}
-	return text
+	return cleanText
 }
 
 func (e *Ear) Start(ctx context.Context) {
