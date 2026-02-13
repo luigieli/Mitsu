@@ -1,0 +1,7 @@
+# BASE CONFIG
+FROM llama3.2:3b
+PARAMETER temperature 0.7
+
+# --- ENGLISH PERSONA ---
+# To create: ollama create mitsu-en -f Modelfile.en
+# (I will separate these into two files)
