@@ -122,6 +122,8 @@ func TestMitsuFullLoopE2E(t *testing.T) {
 	// 6. Verify output
 	exitCode, _, err := companionC.Exec(ctx, []string{"ls", "/app/test_output.wav"})
 	if err != nil || exitCode != 0 {
-		t.Errorf("Mitsu did not produce the output wav file.")
+		reader, _ := companionC.Logs(ctx)
+		logs, _ := io.ReadAll(reader)
+		t.Fatalf("Mitsu did not produce the output wav file. Logs:\n%s", string(logs))
 	}
 }
