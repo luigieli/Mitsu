@@ -195,7 +195,11 @@ func startWebServer(speechToBrain common.SpeechText, b *Broker) {
 	http.HandleFunc("/talk", func(w http.ResponseWriter, r *http.Request) {
 		text := r.URL.Query().Get("text")
 		if text != "" {
-			speechToBrain <- common.SpeechEntry{Text: text, Timestamp: time.Now()}
+			speechToBrain <- common.SpeechEntry{
+				Text:     text,
+				Language: "en", // Default for web text input
+				Timestamp: time.Now(),
+			}
 			fmt.Fprint(w, "OK")
 		}
 	})

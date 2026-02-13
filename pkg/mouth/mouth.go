@@ -9,7 +9,10 @@ import (
 	"mitsu/pkg/common"
 	"net/http"
 	"os/exec"
+	"strings"
 	"sync/atomic"
+
+	"github.com/abadojack/whatlanggo"
 )
 
 type Mouth struct {
@@ -82,16 +85,30 @@ func (m *Mouth) Start(ctx context.Context) {
 
 	for {
 		select {
-		case sentence := <-m.BrainToMouth:
+		case entry := <-m.BrainToMouth:
+			sentence := entry.Text
 			if sentence == "" {
 				continue
 			}
 
 			m.IsMitsuSpeaking.Store(true)
 
+			// 1. Detect the ACTUAL language of the response
+			info := whatlanggo.Detect(sentence)
+			detectedLang := "en"
+			if info.Lang == whatlanggo.Por {
+				detectedLang = "pt"
+			}
+
+			// Consistency Hack: If response is short, trust the input language
+			if len(strings.Split(sentence, " ")) < 5 {
+				detectedLang = entry.InputLanguage
+			}
+
+			// 2. Select the correct Voice and LangCode
 			voice := "mitsu_anime_en"
 			langCode := "a"
-			if m.CurrentLang == "pt" {
+			if detectedLang == "pt" {
 				voice = "mitsu_anime_pt"
 				langCode = "p"
 			}
@@ -128,6 +145,21 @@ func (m *Mouth) Start(ctx context.Context) {
 			
 			convCmd.Wait()
 			resp.Body.Close()
+
+			if m.TestOutput != "" {
+				// In test mode, we want to close the pipe and wait for ffmpeg to finish
+				// so the file is written completely.
+				pw.Close()
+				playbackCmd.Wait()
+				// Re-open for next sentence if needed, but for E2E it's one sentence
+				pr, pw = io.Pipe()
+				playbackCmd = exec.CommandContext(ctx, "ffmpeg", "-y",
+					"-f", "s16le", "-ar", "24000", "-ac", "1", "-i", "pipe:0",
+					m.TestOutput)
+				playbackCmd.Stdin = pr
+				playbackCmd.Start()
+			}
+
 			m.IsMitsuSpeaking.Store(false)
 			fmt.Println("Mouth finished sentence.")
 

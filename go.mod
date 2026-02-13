@@ -2,7 +2,11 @@ module mitsu
 
 go 1.24.13
 
-require github.com/testcontainers/testcontainers-go v0.40.0
+require (
+	github.com/abadojack/whatlanggo v1.0.1
+	github.com/maxhawkins/go-webrtcvad v0.0.0-20210121163624-be60036f3083
+	github.com/testcontainers/testcontainers-go v0.40.0
+)
 
 require (
 	dario.cat/mergo v1.0.2 // indirect

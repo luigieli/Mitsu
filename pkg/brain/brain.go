@@ -59,7 +59,13 @@ func (b *Brain) Start() {
 			default:
 			}
 
-			history = append(history, ChatMessage{Role: "user", Content: entry.Text})
+			// Language Enforcement
+			langInstruction := "IMPORTANT: The user is speaking English. You MUST reply in English."
+			if entry.Language == "pt" {
+				langInstruction = "IMPORTANT: The user is speaking Portuguese. You MUST reply in Portuguese."
+			}
+
+			history = append(history, ChatMessage{Role: "user", Content: langInstruction + "\n\n" + entry.Text})
 			if len(history) > 10 {
 				history = history[len(history)-10:]
 			}
@@ -96,7 +102,10 @@ func (b *Brain) Start() {
 			case b.UiMessages <- string(msg):
 			default:
 			}
-			b.BrainToMouth <- responseText
+			b.BrainToMouth <- common.LLMEntry{
+				Text:          responseText,
+				InputLanguage: entry.Language,
+			}
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package ear
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -155,19 +156,29 @@ func (e *Ear) transcribe(ctx context.Context, audioData []byte) {
 	exec.Command("ffmpeg", "-y", "-f", "s16le", "-ar", "16000", "-ac", "1", "-i", tempFile, wavFile).Run()
 	defer os.Remove(wavFile)
 
-	whisperCmd := exec.CommandContext(ctx, "./whisper-cpp", "-m", e.WhisperModel, "-f", wavFile, "-nt", "-np", "-l", e.CurrentLang, "-bs", "1", "-t", "4")
-	out, _ := whisperCmd.CombinedOutput()
+	whisperCmd := exec.CommandContext(ctx, "./whisper-cpp", "-m", e.WhisperModel, "-f", wavFile, "-nt", "-np", "-l", "auto", "-bs", "1", "-t", "4")
+	var stderr bytes.Buffer
+	whisperCmd.Stderr = &stderr
+	out, _ := whisperCmd.Output()
+
+	detectedLang := "en" // Default
+	stderrStr := stderr.String()
+	if strings.Contains(stderrStr, "auto-detected language: pt") {
+		detectedLang = "pt"
+	} else if strings.Contains(stderrStr, "auto-detected language: en") {
+		detectedLang = "en"
+	}
 
 	text := strings.TrimSpace(string(out))
 	if text != "" && !strings.HasPrefix(text, "[") {
 		text = e.ApplyFuzzyNameCorrection(text)
 
-		fmt.Printf("Captured: %s\n", text)
+		fmt.Printf("Captured (%s): %s\n", detectedLang, text)
 		msg, _ := json.Marshal(map[string]string{"text": text, "type": "mic"})
 		select {
 		case e.UiMessages <- string(msg):
 		default:
 		}
-		e.SpeechToBrain <- common.SpeechEntry{Text: text, Timestamp: time.Now()}
+		e.SpeechToBrain <- common.SpeechEntry{Text: text, Language: detectedLang, Timestamp: time.Now()}
 	}
 }
