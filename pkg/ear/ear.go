@@ -1,16 +1,18 @@
 package ear
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mitsu/pkg/common"
 	"os"
 	"os/exec"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/maxhawkins/go-webrtcvad"
 )
 
 type Ear struct {
@@ -19,10 +21,11 @@ type Ear struct {
 	IsMitsuSpeaking *atomic.Bool
 	SpeechToBrain   common.SpeechText
 	UiMessages      chan string
+	InputDevice     string
+	TestInput       string // Path to a wav file to play once for testing
 }
 
 func (e *Ear) ApplyFuzzyNameCorrection(text string) string {
-	// Remove common punctuation that might interfere with matching
 	cleanText := strings.ReplaceAll(text, ",", "")
 	cleanText = strings.ReplaceAll(cleanText, "!", "")
 	cleanText = strings.ReplaceAll(cleanText, "?", "")
@@ -38,103 +41,129 @@ func (e *Ear) ApplyFuzzyNameCorrection(text string) string {
 }
 
 func (e *Ear) Start(ctx context.Context) {
-	fmt.Println("Ear Routine started.")
-	const (
-		baseThreshold = 1500
-		silenceLimit  = 1200
-		chunkSize     = 3200
-	)
-	isSpeaking := false
+	fmt.Printf("Ear Routine started with VAD on %s\n", e.InputDevice)
 
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(500 * time.Millisecond):
-				status := "IDLE"
-				if e.IsMitsuSpeaking.Load() {
-					status = "SPEAKING..."
-				} else if isSpeaking {
-					status = "LISTENING"
-				}
-				msg, _ := json.Marshal(map[string]string{"text": status, "type": "status"})
-				select {
-				case e.UiMessages <- string(msg):
-				default:
-				}
-			}
-		}
-	}()
+	vad, err := webrtcvad.New()
+	if err != nil {
+		fmt.Printf("Error creating VAD: %v\n", err)
+		return
+	}
+	vad.SetMode(3)
+
+	const (
+		sampleRate      = 16000
+		frameDurationMs = 30
+		frameSize       = sampleRate * frameDurationMs / 1000
+		byteSize        = frameSize * 2
+		silenceLimit    = 15 // ~450ms
+	)
 
 	for {
-		recordCmd := exec.CommandContext(ctx, "parec", "-d", "denoised_mic", "--format=s16le", "--channels=1", "--rate=16000", "--property=application.name=Mitsu_Ears")
-		stdout, _ := recordCmd.StdoutPipe()
-		if err := recordCmd.Start(); err != nil {
-			time.Sleep(1 * time.Second)
-			continue
-		}
-		buffer := new(bytes.Buffer)
-		silenceMs := 0
-		data := make([]byte, chunkSize)
-		for {
-			n, err := stdout.Read(data)
-			if err != nil || n == 0 {
-				break
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			var stdout io.ReadCloser
+			var cmd *exec.Cmd
+
+			if e.TestInput != "" {
+				fmt.Printf("Ear: Running in test mode with file %s\n", e.TestInput)
+				cmd = exec.CommandContext(ctx, "ffmpeg", "-i", e.TestInput, "-f", "s16le", "-ar", "16000", "-ac", "1", "pipe:1")
+				stdout, _ = cmd.StdoutPipe()
+				e.TestInput = "" // Run once
+			} else {
+				cmd = exec.CommandContext(ctx, "parec", "-d", e.InputDevice, "--format=s16le", "--channels=1", "--rate=16000", "--property=application.name=Mitsu_Ear")
+				stdout, _ = cmd.StdoutPipe()
 			}
 
-			maxAmp := 0
-			for i := 0; i < n; i += 2 {
-				sample := int16(data[i]) | int16(data[i+1])<<8
-				if sample < 0 {
-					sample = -sample
-				}
-				if int(sample) > maxAmp {
-					maxAmp = int(sample)
-				}
+			if err := cmd.Start(); err != nil {
+				time.Sleep(1 * time.Second)
+				continue
 			}
 
-			effThreshold := baseThreshold
-			if e.IsMitsuSpeaking.Load() {
-				effThreshold = baseThreshold * 2.5
-			}
+			buffer := make([]byte, byteSize)
+			var speechBuffer []byte
+			isSpeaking := false
+			silenceCounter := 0
 
-			if maxAmp > effThreshold {
-				if !isSpeaking {
-					isSpeaking = true
-				}
-				buffer.Write(data[:n])
-				silenceMs = 0
-			} else if isSpeaking {
-				buffer.Write(data[:n])
-				silenceMs += 100
-				if silenceMs >= silenceLimit {
-					isSpeaking = false
+			for {
+				_, err := io.ReadFull(stdout, buffer)
+				if err != nil {
+					if err == io.EOF || err == io.ErrUnexpectedEOF {
+						if isSpeaking {
+							fmt.Printf("VAD: EOF reached while speaking. Forcing transcription. Buffer size: %d\n", len(speechBuffer))
+							finalBuffer := make([]byte, len(speechBuffer))
+							copy(finalBuffer, speechBuffer)
+							go e.transcribe(ctx, finalBuffer)
+							isSpeaking = false
+						}
+					}
 					break
 				}
-			}
-		}
-		recordCmd.Process.Kill()
-		if buffer.Len() > 32000 {
-			tempFile := "/tmp/phrase.raw"
-			os.WriteFile(tempFile, buffer.Bytes(), 0644)
-			wavFile := "/tmp/phrase.wav"
-			exec.Command("ffmpeg", "-y", "-f", "s16le", "-ar", "16000", "-ac", "1", "-i", tempFile, wavFile).Run()
 
-			whisperCmd := exec.CommandContext(ctx, "./whisper-cpp", "-m", e.WhisperModel, "-f", wavFile, "-nt", "-np", "-l", e.CurrentLang, "-bs", "1", "-t", "4", "-ngl", "100")
-			out, _ := whisperCmd.CombinedOutput()
-			text := strings.TrimSpace(string(out))
-			if text != "" && !strings.HasPrefix(text, "[") {
-				text = e.ApplyFuzzyNameCorrection(text)
+				active, _ := vad.Process(sampleRate, buffer)
 
-				fmt.Printf("Captured: \"%s\"\n", text)
-				msg, _ := json.Marshal(map[string]string{"text": text, "type": "mic"})
-				select {
-				case e.UiMessages <- string(msg):
-				default:
+				if e.IsMitsuSpeaking.Load() {
+					active = false
 				}
-				e.SpeechToBrain <- common.SpeechEntry{Text: text, Timestamp: time.Now()}
+
+				if active {
+					if !isSpeaking {
+						isSpeaking = true
+						fmt.Println("VAD: Speech detected...")
+					}
+					speechBuffer = append(speechBuffer, buffer...)
+					silenceCounter = 0
+				} else if isSpeaking {
+					speechBuffer = append(speechBuffer, buffer...)
+					silenceCounter++
+
+					if silenceCounter >= silenceLimit {
+						fmt.Printf("VAD: Sentence finished. Buffer size: %d\n", len(speechBuffer))
+						if len(speechBuffer) > sampleRate*2 {
+							finalBuffer := make([]byte, len(speechBuffer))
+							copy(finalBuffer, speechBuffer)
+							go e.transcribe(ctx, finalBuffer)
+						} else {
+							fmt.Println("VAD: Buffer too small, skipping transcription.")
+						}
+						speechBuffer = nil
+						isSpeaking = false
+						silenceCounter = 0
+					}
+				}
 			}
+			cmd.Process.Kill()
+			if ctx.Err() != nil {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
 		}
+	}
+}
+
+func (e *Ear) transcribe(ctx context.Context, audioData []byte) {
+	tempFile := fmt.Sprintf("/tmp/mitsu_audio_%d.raw", time.Now().UnixNano())
+	os.WriteFile(tempFile, audioData, 0644)
+	defer os.Remove(tempFile)
+
+	wavFile := tempFile + ".wav"
+	exec.Command("ffmpeg", "-y", "-f", "s16le", "-ar", "16000", "-ac", "1", "-i", tempFile, wavFile).Run()
+	defer os.Remove(wavFile)
+
+	whisperCmd := exec.CommandContext(ctx, "./whisper-cpp", "-m", e.WhisperModel, "-f", wavFile, "-nt", "-np", "-l", e.CurrentLang, "-bs", "1", "-t", "4")
+	out, _ := whisperCmd.CombinedOutput()
+
+	text := strings.TrimSpace(string(out))
+	if text != "" && !strings.HasPrefix(text, "[") {
+		text = e.ApplyFuzzyNameCorrection(text)
+
+		fmt.Printf("Captured: %s\n", text)
+		msg, _ := json.Marshal(map[string]string{"text": text, "type": "mic"})
+		select {
+		case e.UiMessages <- string(msg):
+		default:
+		}
+		e.SpeechToBrain <- common.SpeechEntry{Text: text, Timestamp: time.Now()}
 	}
 }

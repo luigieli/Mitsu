@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mitsu/pkg/common"
 	"net/http"
 	"os/exec"
@@ -19,6 +20,8 @@ type Mouth struct {
 	BrainToMouth    common.LLMResponse
 	BargeIn         chan struct{}
 	KokoroVoiceAmy  string
+	OutputDevice    string
+	TestOutput      string // Path to a wav file to save output for testing
 }
 
 // Voice Configuration from Lab
@@ -56,7 +59,28 @@ func (m *Mouth) BuildFilterChain(f VoiceConfig) string {
 }
 
 func (m *Mouth) Start(ctx context.Context) {
-	fmt.Println("Mouth Routine started.")
+	fmt.Println("Mouth Routine started with Persistent Stream.")
+
+	pr, pw := io.Pipe()
+
+	// Persistent playback process
+	var playbackCmd *exec.Cmd
+	if m.TestOutput != "" {
+		fmt.Printf("Mouth: Running in test mode, saving output to %s\n", m.TestOutput)
+		playbackCmd = exec.CommandContext(ctx, "ffmpeg", "-y",
+			"-f", "s16le", "-ar", "24000", "-ac", "1", "-i", "pipe:0",
+			m.TestOutput)
+	} else {
+		playbackCmd = exec.CommandContext(ctx, "ffmpeg",
+			"-f", "s16le", "-ar", "24000", "-ac", "1", "-i", "pipe:0",
+			"-f", "pulse", "-device", m.OutputDevice, "Mitsu_Voice")
+	}
+	
+	playbackCmd.Stdin = pr
+	if err := playbackCmd.Start(); err != nil {
+		fmt.Printf("Failed to start persistent playback: %v\n", err)
+		return
+	}
 
 	for {
 		select {
@@ -64,23 +88,11 @@ func (m *Mouth) Start(ctx context.Context) {
 			if sentence == "" {
 				continue
 			}
-			playCtx, playCancel := context.WithCancel(ctx)
-			go func() {
-				select {
-				case <-m.BargeIn:
-					fmt.Println("Mouth: Interrupted!")
-					playCancel()
-				case <-playCtx.Done():
-				}
-			}()
 
 			m.IsMitsuSpeaking.Store(true)
 
-			// Use the dynamically loaded config
 			voice := m.ActiveConfig.VoiceModel
 			langCode := m.ActiveConfig.LangCode
-
-			// Override for English mode if set via CLI
 			if m.CurrentLang == "en" && voice == "mitsu_custom" {
 				voice = m.KokoroVoiceAmy
 				langCode = "a"
@@ -90,7 +102,7 @@ func (m *Mouth) Start(ctx context.Context) {
 				"input":     sentence,
 				"voice":     voice,
 				"lang_code": langCode,
-				"speed":     1.0, // We use rubberband for tempo now
+				"speed":     1.0,
 				"model":     "kokoro",
 			})
 
@@ -98,41 +110,32 @@ func (m *Mouth) Start(ctx context.Context) {
 			if err != nil {
 				fmt.Printf("Kokoro Error: %v\n", err)
 				m.IsMitsuSpeaking.Store(false)
-				playCancel()
 				continue
 			}
 
-			// BUILD FILTER CHAIN FROM CONFIG
 			filterChain := m.BuildFilterChain(m.ActiveConfig)
 
-			ffmpegCmd := exec.CommandContext(playCtx, "ffmpeg", "-i", "pipe:0", "-af", filterChain, "-f", "wav", "pipe:1")
-			ffmpegCmd.Stdin = resp.Body
-			stdout, _ := ffmpegCmd.StdoutPipe()
+			convCmd := exec.CommandContext(ctx, "ffmpeg", "-i", "pipe:0", "-af", filterChain, "-f", "s16le", "-ar", "24000", "-ac", "1", "pipe:1")
+			convCmd.Stdin = resp.Body
+			stdout, _ := convCmd.StdoutPipe()
 
-			paplayCmd := exec.CommandContext(playCtx, "paplay", "--property=application.name=Mitsu")
-			paplayCmd.Stdin = stdout
-
-			fmt.Printf("Mouth playing (Studio Active): \"%s\"\n", sentence)
-			if err := ffmpegCmd.Start(); err != nil {
+			if err := convCmd.Start(); err != nil {
 				resp.Body.Close()
 				m.IsMitsuSpeaking.Store(false)
-				playCancel()
-				continue
-			}
-			if err := paplayCmd.Start(); err != nil {
-				resp.Body.Close()
-				m.IsMitsuSpeaking.Store(false)
-				playCancel()
 				continue
 			}
 
-			paplayCmd.Wait()
-			ffmpegCmd.Process.Kill()
+			fmt.Printf("Mouth speaking: \"%s\"\n", sentence)
+			io.Copy(pw, stdout)
+			
+			convCmd.Wait()
 			resp.Body.Close()
 			m.IsMitsuSpeaking.Store(false)
-			playCancel()
-			fmt.Println("Mouth finished.")
+			fmt.Println("Mouth finished sentence.")
+
 		case <-ctx.Done():
+			pw.Close()
+			playbackCmd.Wait()
 			return
 		}
 	}

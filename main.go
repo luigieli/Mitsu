@@ -66,6 +66,8 @@ func main() {
 		IsMitsuSpeaking: &isMitsuSpeaking,
 		SpeechToBrain:   speechToBrain,
 		UiMessages:      broker.messages,
+		InputDevice:     "Mitsu_Input.monitor",
+		TestInput:       os.Getenv("TEST_INPUT_FILE"),
 	}
 
 	ollamaURL := os.Getenv("OLLAMA_HOST")
@@ -93,6 +95,8 @@ func main() {
 		BrainToMouth:    brainToMouth,
 		BargeIn:         bargeIn,
 		KokoroVoiceAmy:  KokoroVoiceAmy,
+		OutputDevice:    "Mitsu_Output",
+		TestOutput:      os.Getenv("TEST_OUTPUT_FILE"),
 	}
 
 	go mitsuEar.Start(ctx)

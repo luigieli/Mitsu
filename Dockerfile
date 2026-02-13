@@ -18,11 +18,12 @@ RUN git clone https://github.com/ggerganov/whisper.cpp.git && \
 
 # Stage 2: Build the Go Companion
 FROM golang:1.24-bookworm AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY go.mod* go.sum* ./
 RUN if [ -f go.mod ]; then go mod download; fi
 COPY . .
-RUN CGO_ENABLED=0 go build -o companion main.go
+RUN CGO_ENABLED=1 go build -o companion main.go
 
 # Stage 3: Runtime
 FROM debian:bookworm-slim
