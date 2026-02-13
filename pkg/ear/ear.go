@@ -72,7 +72,11 @@ func (e *Ear) Start(ctx context.Context) {
 				stdout, _ = cmd.StdoutPipe()
 				e.TestInput = "" // Run once
 			} else {
-				cmd = exec.CommandContext(ctx, "parec", "-d", e.InputDevice, "--format=s16le", "--channels=1", "--rate=16000", "--property=application.name=Mitsu_Ear")
+				args := []string{"--format=s16le", "--channels=1", "--rate=16000", "--property=application.name=Mitsu_Ear"}
+				if e.InputDevice != "" {
+					args = append(args, "-d", e.InputDevice)
+				}
+				cmd = exec.CommandContext(ctx, "parec", args...)
 				stdout, _ = cmd.StdoutPipe()
 			}
 

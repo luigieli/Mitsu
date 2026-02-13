@@ -1,4 +1,4 @@
-.PHONY: build up down mic-setup clean run run-pt run-en setup-model monitor clear-memory help
+.PHONY: build up down mic-setup clean run run-pt run-en setup-model monitor clear-memory help test
 
 UID := $(shell id -u)
 GID := $(shell id -g)
@@ -64,8 +64,7 @@ setup-model:
 	docker-compose exec -T ollama ollama create mitsu-pt -f /Modelfile.pt
 
 monitor:
-	@echo "Routing Mitsu's output to your speakers..."
-	pactl load-module module-loopback source=VirtualMic.monitor sink=@DEFAULT_SINK@ 2>/dev/null || true
+	@echo "Manual routing required via qpwgraph. Connect Mitsu_Mouth to your playback device."
 
 test:
 	@echo "Running Go unit tests..."
@@ -77,14 +76,8 @@ test:
 
 help:
 	@echo "Available targets:"
-	@echo "  make run-pt      - Run Mitsu in Portuguese mode"
-	@echo "  make run-en      - Run Mitsu in English mode"
-	@echo "  make clear-memory- Reset Mitsu's conversation history"
-	@echo "  make run         - Run Mitsu (defaults to English or current MITSU_LANG)"
-	@echo "  make build       - Build docker images"
-	@echo "  make up          - Start services"
-	@echo "  make setup-model - Create the Mitsu persona in Ollama"
-	@echo "  make mic-setup   - Create VirtualMic sink"
-	@echo "  make clean       - Remove containers and data"
+	@echo "  make run         - Build and start Mitsu"
+	@echo "  make test        - Run all tests"
+	@echo "  make clean       - Reset everything"
 
 .DEFAULT_GOAL := help

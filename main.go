@@ -66,7 +66,7 @@ func main() {
 		IsMitsuSpeaking: &isMitsuSpeaking,
 		SpeechToBrain:   speechToBrain,
 		UiMessages:      broker.messages,
-		InputDevice:     "Mitsu_Input.monitor",
+		InputDevice:     "", // Use default (let qpwgraph handle it)
 		TestInput:       os.Getenv("TEST_INPUT_FILE"),
 	}
 
@@ -95,7 +95,7 @@ func main() {
 		BrainToMouth:    brainToMouth,
 		BargeIn:         bargeIn,
 		KokoroVoiceAmy:  KokoroVoiceAmy,
-		OutputDevice:    "Mitsu_Output",
+		OutputDevice:    "", // Use default (let qpwgraph handle it)
 		TestOutput:      os.Getenv("TEST_OUTPUT_FILE"),
 	}
 

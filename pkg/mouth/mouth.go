@@ -71,9 +71,11 @@ func (m *Mouth) Start(ctx context.Context) {
 			"-f", "s16le", "-ar", "24000", "-ac", "1", "-i", "pipe:0",
 			m.TestOutput)
 	} else {
-		playbackCmd = exec.CommandContext(ctx, "ffmpeg",
-			"-f", "s16le", "-ar", "24000", "-ac", "1", "-i", "pipe:0",
-			"-f", "pulse", "-device", m.OutputDevice, "Mitsu_Voice")
+		args := []string{"-f", "s16le", "-ar", "24000", "-ac", "1", "-i", "pipe:0", "-f", "pulse"}
+		if m.OutputDevice != "" {
+			args = append(args, "-device", m.OutputDevice)
+		}
+		playbackCmd = exec.CommandContext(ctx, "ffmpeg", args...)
 	}
 	
 	playbackCmd.Stdin = pr
