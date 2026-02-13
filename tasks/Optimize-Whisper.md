@@ -10,34 +10,34 @@ Reduce transcription latency for the `small` Whisper model on an RX 580 (Polaris
 ## Action Plan
 
 ### 1. Model Quantization (q5_1)
-- [ ] Download the optimized 5-bit quantized model.
+- [x] Download the optimized 5-bit quantized model.
   ```bash
   # Assuming script location
   ./models/download-ggml-model.sh small-q5_1
   ```
-- [ ] Update `voice_config.json` or initialization logic to use `ggml-small-q5_1.bin`.
+- [x] Update `voice_config.json` or initialization logic to use `ggml-small-q5_1.bin`.
 
 ### 2. Vulkan Acceleration
-- [ ] Rebuild `whisper.cpp` with Vulkan support enabled.
+- [x] Rebuild `whisper.cpp` with Vulkan support enabled.
   ```bash
   rm -rf build
   cmake -B build -DGGML_VULKAN=1
   cmake --build build -j --config Release
   ```
-- [ ] Ensure `GGML_VULKAN=1` is passed during the build process in the `Makefile` or CI/CD.
+- [x] Ensure `GGML_VULKAN=1` is passed during the build process in the `Makefile` or CI/CD.
 
 ### 3. Latency Reduction (Greedy Search)
-- [ ] Set `beam_size` to `1` in the transcription parameters.
+- [x] Set `beam_size` to `1` in the transcription parameters.
   - **Flag**: `--beam_size 1` or `-bs 1`.
-- [ ] Verify impact on accuracy vs. speed (Expected: 80% workload reduction).
+- [x] Verify impact on accuracy vs. speed (Expected: 80% workload reduction).
 
 ### 4. Language Detection Optimization
-- [ ] Implement logic to skip "Auto-Detect Language" latency.
-- [ ] **Option A (Go Logic)**: Force language via flags (`--language pt` or `--language en`) based on application state or toggle.
+- [x] Implement logic to skip "Auto-Detect Language" latency.
+- [x] **Option A (Go Logic)**: Force language via flags (`--language pt` or `--language en`) based on application state or toggle.
 - [ ] **Option B (Hotkeys)**: Implement keybindings for instant language forcing.
 
 ### 5. Integration & Command Tuning
-- [ ] Configure the final execution command/parameters:
+- [x] Configure the final execution command/parameters:
   ```bash
   ./main 
     -m models/ggml-small-q5_1.bin 
