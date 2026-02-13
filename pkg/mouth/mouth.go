@@ -43,18 +43,13 @@ type VoiceConfig struct {
 }
 
 func (m *Mouth) BuildFilterChain(f VoiceConfig) string {
-	formant_val := "preserved"
-	if !f.FormantPreserved {
-		formant_val = "shifted"
-	}
+	// Anime/Cute Voice Post-Processing Chain
+	// 1.15 = 15% higher pitch
+	pitchFactor := 1.15
 
 	return fmt.Sprintf(
-		"highpass=f=%d,lowpass=f=%d,equalizer=f=400:t=q:w=1:g=%d,equalizer=f=3000:t=q:w=1:g=%d,equalizer=f=8000:t=q:w=1:g=%d,"+
-			"rubberband=pitch=%.2f:tempo=%.2f:formant=%s,deesser=i=%.2f,aexciter=amount=%.2f,pan=stereo|c0=c0|c1=c0,extrastereo=m=%.2f,"+
-			"loudnorm=I=%d:LRA=11:TP=-1.5",
-		f.Highpass, f.Lowpass, f.BoxyGain, f.PresenceGain, f.SparkleGain,
-		f.Pitch, f.Speed, formant_val, f.DeesserIntensity, f.ExciterAmount, f.StereoWidth,
-		f.LoudnormI,
+		"asetrate=24000*%.2f,atempo=1/%.2f,highpass=f=200,equalizer=f=4000:t=h:width=2000:g=4,compand=attacks=0:points=-90/-90|-40/-40|0/-10|20/-10:gain=5",
+		pitchFactor, pitchFactor,
 	)
 }
 
