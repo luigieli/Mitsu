@@ -8,6 +8,7 @@ import (
 	"mitsu/pkg/brain"
 	"mitsu/pkg/common"
 	"mitsu/pkg/ear"
+	"mitsu/pkg/gaming"
 	"mitsu/pkg/mouth"
 	"net/http"
 	"os"
@@ -28,6 +29,7 @@ var isMitsuSpeaking atomic.Bool
 var currentLang string
 var clearMemoryChan chan struct{}
 var activeVoiceConfig mouth.VoiceConfig
+var gameController *gaming.GameController
 
 const (
 	WhisperModel   = "models/ggml-small-q5_1.bin"
@@ -60,6 +62,9 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Initialize components
+	gameController = gaming.NewGameController("localhost:8888")
+	go gameController.Start(ctx)
+
 	mitsuEar := &ear.Ear{
 		WhisperModel:    WhisperModel,
 		CurrentLang:     currentLang,
@@ -149,12 +154,14 @@ func startWebServer(speechToBrain common.SpeechText, b *Broker) {
         .aura { color: #ff00ff; font-weight: bold; }
         input { background: #000; color: #00ff00; border: 1px solid #00ff00; width: 80%; padding: 12px; }
         button { background: #00ff00; color: #000; border: none; padding: 12px 24px; cursor: pointer; font-weight: bold; }
+        .game-btn { background: #ffaa00; margin-left: 10px; }
     </style>
 </head>
 <body>
     <div id="header">
         <h1>MITSU COMMAND CENTER</h1>
         <div id="status" class="off">IDLE</div>
+        <button onclick="toggleGaming()" class="game-btn" id="gameBtn">GAMER MODE: OFF</button>
     </div>
     <div id="terminal"></div>
     <input type="text" id="userInput" placeholder="Type message..." onkeydown="if(event.key==='Enter') send()">
@@ -162,6 +169,7 @@ func startWebServer(speechToBrain common.SpeechText, b *Broker) {
     <script>
         const t = document.getElementById("terminal");
         const s = document.getElementById("status");
+        const gb = document.getElementById("gameBtn");
         function log(msg, className) {
             const div = document.createElement("div");
             div.className = className;
@@ -176,6 +184,8 @@ func startWebServer(speechToBrain common.SpeechText, b *Broker) {
             if (data.type === "status") {
                 s.textContent = data.text;
                 s.className = (data.text === "SPEAKING..." || data.text === "LISTENING") ? "on" : "off";
+            } else if (data.type === "gaming") {
+                gb.textContent = "GAMER MODE: " + data.status;
             } else {
                 log(data.text, data.type);
             }
@@ -186,6 +196,9 @@ func startWebServer(speechToBrain common.SpeechText, b *Broker) {
             log(i.value, "user");
             fetch("/talk?text=" + encodeURIComponent(i.value));
             i.value = "";
+        }
+        function toggleGaming() {
+            fetch("/gaming/toggle");
         }
     </script>
 </body>
@@ -202,6 +215,19 @@ func startWebServer(speechToBrain common.SpeechText, b *Broker) {
 			}
 			fmt.Fprint(w, "OK")
 		}
+	})
+
+	http.HandleFunc("/gaming/toggle", func(w http.ResponseWriter, r *http.Request) {
+		enabled := gameController.Enabled.Load()
+		gameController.Enabled.Store(!enabled)
+		status := "OFF"
+		if !enabled {
+			status = "ON"
+		}
+		// Notify via broker (hacky but works for now)
+		msg, _ := json.Marshal(map[string]string{"status": status, "type": "gaming"})
+		b.messages <- string(msg)
+		fmt.Fprint(w, "OK")
 	})
 
 	http.HandleFunc("/clear", func(w http.ResponseWriter, r *http.Request) {
