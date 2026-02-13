@@ -1,0 +1,8 @@
+ollama_data/
+.ccache/
+.git/
+download_models.sh
+ROCM_INSTALLATION.md
+PLAN.md
+ROADMAP.md
+TODO.md
