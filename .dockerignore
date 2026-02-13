@@ -1,8 +1,11 @@
 ollama_data/
-.ccache/
-.git/
+kokoro_data/
+.gemini/
+*.pt
+*.bin
+*.wav
+*.raw
+Todo.md
+docker-compose.yml
+Dockerfile
 download_models.sh
-ROCM_INSTALLATION.md
-PLAN.md
-ROADMAP.md
-TODO.md

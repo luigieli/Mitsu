@@ -1,33 +1,20 @@
-# Stage 1: Build Whisper.cpp with VULKAN support
-FROM ubuntu:22.04 AS whisper-builder
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc g++ make git cmake ca-certificates curl gnupg2 && \
-    curl -fsSL https://packages.lunarg.com/lunarg-signing-key-pub.asc | gpg --dearmor -o /usr/share/keyrings/lunarg-vulkan.gpg && \
-    # Using the main stable repo URL
-    echo "deb [signed-by=/usr/share/keyrings/lunarg-vulkan.gpg] https://packages.lunarg.com/vulkan jammy main" > /etc/apt/sources.list.d/lunarg-vulkan.list && \
-    apt-get update && apt-get install -y --no-install-recommends vulkan-sdk && \
-    rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-RUN git clone https://github.com/ggerganov/whisper.cpp.git && \
-    cd whisper.cpp && \
-    cmake -B build -DGGML_VULKAN=1 -DBUILD_SHARED_LIBS=OFF && \
-    cmake --build build --config Release --target whisper-cli && \
-    cp build/bin/whisper-cli /whisper-cpp
-
-# Stage 2: Build the Go Companion
+# Stage 1: Build the Go Companion
 FROM golang:1.24-bookworm AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY go.mod* go.sum* ./
-RUN if [ -f go.mod ]; then go mod download; fi
-COPY . .
+# Cache Go modules
+COPY go.mod go.sum ./
+RUN go mod download
+# Copy only source needed for build
+COPY main.go ./
+COPY pkg/ ./pkg/
 RUN CGO_ENABLED=1 go build -o companion main.go
 
-# Stage 3: Runtime
+# Stage 2: Runtime
 FROM debian:bookworm-slim
 WORKDIR /app
+
+# Pre-install system packages (cached layer)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg alsa-utils pulseaudio-utils libstdc++6 curl ca-certificates espeak-ng-data \
     libvulkan1 mesa-vulkan-drivers mesa-utils \
@@ -36,11 +23,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN echo 'pcm.!default { type pulse }' > /etc/asound.conf && \
     echo 'ctl.!default { type pulse }' >> /etc/asound.conf
 
-# Copy binaries
-COPY --from=whisper-builder /whisper-cpp .
+# Copy binary from builder
 COPY --from=builder /app/companion .
 
-# Copy models
+# Copy PRE-BUILT whisper-cpp from host (Optimization!)
+# Ensure 'whisper-cpp' exists on host before building
+COPY whisper-cpp ./whisper-cpp
+
+# Models are mapped via volumes or downloaded at runtime to keep image small
+# but for now we copy if they exist in models/
 COPY models/ ./models/
 
 CMD ["./companion"]
