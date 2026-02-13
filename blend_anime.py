@@ -20,7 +20,7 @@ def blend_voices():
         # --- RECIPE 1: ANIME PORTUGUESE (Mitsu-PT) ---
         # 60% Dora (Pronunciation) + 40% Alpha (Anime Tone)
         print("Blending Mitsu Anime PT (60% Dora, 40% Alpha)...")
-        mitsu_pt = (dora * 0.6) + (alpha * 0.4)
+        mitsu_pt = (dora * 0.7) + (alpha * 0.3)
         torch.save(mitsu_pt, os.path.join(VOICE_DIR, "mitsu_anime_pt.pt"))
 
         # --- RECIPE 2: ANIME ENGLISH (Mitsu-EN) ---
