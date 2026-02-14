@@ -32,7 +32,6 @@ var activeVoiceConfig mouth.VoiceConfig
 var gameController *gaming.GameController
 
 const (
-	WhisperModel   = "models/ggml-small-q5_1.bin"
 	KokoroVoiceAmy = "af_heart"
 )
 
@@ -65,8 +64,12 @@ func main() {
 	gameController = gaming.NewGameController("localhost:8888")
 	go gameController.Start(ctx)
 
+	sttURL := os.Getenv("STT_HOST")
+	if sttURL == "" {
+		sttURL = "http://localhost:5001"
+	}
 	mitsuEar := &ear.Ear{
-		WhisperModel:    WhisperModel,
+		STTURL:          sttURL,
 		CurrentLang:     currentLang,
 		IsMitsuSpeaking: &isMitsuSpeaking,
 		SpeechToBrain:   speechToBrain,
