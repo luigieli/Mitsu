@@ -1,10 +1,10 @@
 package brain
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"mitsu/pkg/common"
 	"net/http"
 	"strings"
@@ -32,13 +32,16 @@ type OllamaChatRequest struct {
 }
 
 type OllamaChatResponse struct {
-	Message ChatMessage `json:"message"`
-	Done    bool        `json:"done"`
+	Model     string      `json:"model"`
+	CreatedAt time.Time   `json:"created_at"`
+	Message   ChatMessage `json:"message"`
+	Done      bool        `json:"done"`
 }
 
 func (b *Brain) Start() {
-	fmt.Println("Brain Routine started.")
+	fmt.Println("Brain Routine started with Streaming Overlap.")
 	history := []ChatMessage{}
+	splitters := ".?!:;," // Added comma
 
 	for {
 		select {
@@ -78,37 +81,90 @@ func (b *Brain) Start() {
 			reqBody, _ := json.Marshal(OllamaChatRequest{
 				Model:    modelName,
 				Messages: history,
-				Stream:   false,
+				Stream:   true,
 			})
 
 			brainStart := time.Now()
 			resp, err := http.Post(b.OllamaURL+"/api/chat", "application/json", bytes.NewBuffer(reqBody))
 			if err != nil {
+				fmt.Printf("Brain Error: %v\n", err)
 				continue
 			}
-			body, _ := io.ReadAll(resp.Body)
+
+			reader := bufio.NewReader(resp.Body)
+			var fullResponseBuilder strings.Builder
+			var sentenceBuilder strings.Builder
+			firstSentenceDone := false
+
+			for {
+				line, err := reader.ReadBytes('\n')
+				if err != nil {
+					break
+				}
+
+				var ollamaResp OllamaChatResponse
+				if err := json.Unmarshal(line, &ollamaResp); err != nil {
+					continue
+				}
+
+				token := ollamaResp.Message.Content
+				fullResponseBuilder.WriteString(token)
+				sentenceBuilder.WriteString(token)
+
+				// Check for sentence boundary (punctuation found)
+				if strings.ContainsAny(token, splitters) {
+					sentence := strings.TrimSpace(sentenceBuilder.String())
+					if len(sentence) > 2 {
+						if !firstSentenceDone {
+							entry.Profile.AddSpan("Brain_TTFS", time.Since(brainStart))
+							firstSentenceDone = true
+						}
+						
+						// Send chunk to Mouth
+						b.BrainToMouth <- common.LLMEntry{
+							Text:          sentence,
+							InputLanguage: entry.Language,
+							Profile:       entry.Profile,
+							Done:          false,
+						}
+						sentenceBuilder.Reset()
+					}
+				}
+
+				if ollamaResp.Done {
+					break
+				}
+			}
 			resp.Body.Close()
 
-			entry.Profile.AddSpan("Brain", time.Since(brainStart))
-
-			var ollamaResp OllamaChatResponse
-			if err := json.Unmarshal(body, &ollamaResp); err != nil {
-				continue
+			// Send remaining buffer if any, marking it as Done
+			leftover := strings.TrimSpace(sentenceBuilder.String())
+			if len(leftover) > 0 {
+				b.BrainToMouth <- common.LLMEntry{
+					Text:          leftover,
+					InputLanguage: entry.Language,
+					Profile:       entry.Profile,
+					Done:          true,
+				}
+			} else {
+				// If no leftover, send an empty Done signal to close the loop
+				b.BrainToMouth <- common.LLMEntry{
+					Text:          "",
+					InputLanguage: entry.Language,
+					Profile:       entry.Profile,
+					Done:          true,
+				}
 			}
 
-			responseText := strings.TrimSpace(ollamaResp.Message.Content)
+			responseText := strings.TrimSpace(fullResponseBuilder.String())
 			fmt.Printf("Mitsu: \"%s\"\n", responseText)
 			history = append(history, ChatMessage{Role: "assistant", Content: responseText})
 
+			// UI Update with full text
 			msg, _ = json.Marshal(map[string]string{"text": responseText, "type": "aura"})
 			select {
 			case b.UiMessages <- string(msg):
 			default:
-			}
-			b.BrainToMouth <- common.LLMEntry{
-				Text:          responseText,
-				InputLanguage: entry.Language,
-				Profile:       entry.Profile,
 			}
 		}
 	}
