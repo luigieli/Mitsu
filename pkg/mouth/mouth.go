@@ -11,20 +11,19 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/abadojack/whatlanggo"
 )
 
 type Mouth struct {
-	KokoroURL       string
-	CurrentLang     string
-	ActiveConfig    VoiceConfig
-	IsMitsuSpeaking *atomic.Bool
-	BrainToMouth    common.LLMResponse
-	BargeIn         chan struct{}
-	KokoroVoiceAmy  string
-	OutputDevice    string
-	TestOutput      string 
+	KokoroURL          string
+	CurrentLang        string
+	LanguageChangeChan chan string
+	ActiveConfig       VoiceConfig
+	IsMitsuSpeaking    *atomic.Bool
+	BrainToMouth       common.LLMResponse
+	BargeIn            chan struct{}
+	KokoroVoiceAmy     string
+	OutputDevice       string
+	TestOutput         string 
 }
 
 // Voice Configuration from Lab
@@ -51,6 +50,20 @@ func (m *Mouth) BuildFilterChain(f VoiceConfig) string {
 		"asetrate=24000*%.2f,atempo=1/%.2f,highpass=f=200,equalizer=f=4000:t=h:width=2000:g=4,compand=attacks=0:points=-90/-90|-40/-40|0/-10|20/-10:gain=5",
 		pitchFactor, pitchFactor,
 	)
+}
+
+func (m *Mouth) Say(text string, lang string) {
+	m.BrainToMouth <- common.LLMEntry{
+		Text:          text,
+		InputLanguage: lang,
+		Profile:       common.NewProfile(),
+		Done:          true,
+	}
+}
+
+func (m *Mouth) Alert(text string, lang string) {
+	// Immediate vocalization bypass
+	m.Say(text, lang)
 }
 
 func (m *Mouth) Start(ctx context.Context) {
@@ -80,18 +93,18 @@ func (m *Mouth) Start(ctx context.Context) {
 
 	for {
 		select {
+		case newLang := <-m.LanguageChangeChan:
+			fmt.Printf("Mouth: Hotswapping language to %s\n", newLang)
+			m.CurrentLang = newLang
 		case entry := <-m.BrainToMouth:
 			sentence := entry.Text
 			m.IsMitsuSpeaking.Store(true)
 
 			if sentence != "" {
-				// 1. Voice Selection
-				info := whatlanggo.Detect(sentence)
-				detectedLang := "en"
-				if info.Lang == whatlanggo.Por {
-					detectedLang = "pt"
-				} else if len(strings.Split(sentence, " ")) < 5 {
-					detectedLang = entry.InputLanguage
+				// 1. Voice Selection (Locked to the language provided by the Brain/Hotswap)
+				detectedLang := entry.InputLanguage
+				if detectedLang == "" {
+					detectedLang = m.CurrentLang
 				}
 
 				voice := "mitsu_anime_en"
