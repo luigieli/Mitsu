@@ -26,10 +26,15 @@ services:
       dockerfile: Dockerfile.stt
     ports:
       - "5001:5001"
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
     volumes:
       - ./whisper_cache:/root/.cache/huggingface
     environment:
       - WHISPER_MODEL=small
+      - WHISPER_THREADS=4
 
   # Service 4: The Companion (Go CNS)
   companion:

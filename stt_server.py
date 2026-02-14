@@ -6,12 +6,13 @@ import os
 
 # Load model on CPU with INT8 quantization
 model_size = os.getenv("WHISPER_MODEL", "small")
-print(f"Loading Faster-Whisper model: {model_size} (CPU/INT8) with 6 threads...")
+threads = int(os.getenv("WHISPER_THREADS", "4"))
+print(f"Loading Faster-Whisper model: {model_size} (CPU/INT8) with {threads} threads...")
 model = WhisperModel(
     model_size, 
     device="cpu", 
     compute_type="int8",
-    cpu_threads=6,
+    cpu_threads=threads,
     num_workers=1
 )
 
@@ -28,7 +29,7 @@ def transcribe():
     
     start = time.time()
     # beam_size=1 for maximum speed, disable internal VAD since Go already filtered it
-    segments, info = model.transcribe(audio_stream, beam_size=1, vad_filter=False)
+    segments, info = model.transcribe(audio_stream, beam_size=1, best_of=1, temperature=0, condition_on_previous_text=False, vad_filter=False)
     text = "".join([s.text for s in segments]).strip()
     
     duration = time.time() - start

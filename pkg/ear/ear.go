@@ -29,21 +29,22 @@ type Ear struct {
 }
 
 func (e *Ear) Start(ctx context.Context) {
-	fmt.Printf("Ear Routine started with Hybrid Go-VAD Pipeline\n")
+	fmt.Printf("Ear Routine started with Hybrid Go-VAD Pipeline (Ruthless Profile)\n")
 
 	vad, err := webrtcvad.New()
 	if err != nil {
 		fmt.Printf("Error creating VAD: %v\n", err)
 		return
 	}
-	vad.SetMode(3)
+	vad.SetMode(1)
 
 	const (
 		sampleRate      = 16000
 		frameDurationMs = 30
 		frameSize       = sampleRate * frameDurationMs / 1000
 		byteSize        = frameSize * 2
-		silenceLimit    = 40 // ~1.2s
+		// 1.02s Silence = End of Phrase
+		silenceLimit    = 34 
 	)
 
 	for {
@@ -101,14 +102,17 @@ func (e *Ear) Start(ctx context.Context) {
 					speechBuffer = append(speechBuffer, buffer...)
 					silenceCounter++
 
+					// Trigger on silence
 					if silenceCounter >= silenceLimit {
-						fmt.Printf("VAD: Sentence finished. Buffer size: %d\n", len(speechBuffer))
+						fmt.Printf("VAD: Sentence finished. Buffer: %d bytes\n", len(speechBuffer))
+						
 						if len(speechBuffer) > sampleRate {
 							finalBuffer := make([]byte, len(speechBuffer))
 							copy(finalBuffer, speechBuffer)
 							prof := common.NewProfile()
 							go e.transcribe(ctx, finalBuffer, prof)
 						}
+						
 						speechBuffer = nil
 						isSpeaking = false
 						silenceCounter = 0
@@ -124,7 +128,7 @@ func (e *Ear) Start(ctx context.Context) {
 func (e *Ear) cleanAudioWithFFmpeg(inputData []byte) []byte {
 	cmd := exec.Command("ffmpeg",
 		"-f", "s16le", "-ar", "16000", "-ac", "1", "-i", "pipe:0",
-		"-af", "highpass=f=200,silenceremove=1:0.1:-40dB:1:0.1:-40dB",
+		"-af", "silenceremove=start_periods=1:start_threshold=-35dB:stop_periods=-1:stop_duration=0.3:stop_threshold=-35dB",
 		"-fflags", "+bitexact", "-f", "wav", "pipe:1",
 		"-v", "error",
 	)
@@ -139,13 +143,14 @@ func (e *Ear) cleanAudioWithFFmpeg(inputData []byte) []byte {
 	}()
 	cleanedData, _ := io.ReadAll(stdout)
 	cmd.Wait()
-	if len(cleanedData) == 0 { return inputData }
 	return cleanedData
 }
 
 func (e *Ear) transcribe(ctx context.Context, audioData []byte, prof *common.Profile) {
 	start := time.Now()
+	fmt.Printf("[Ear] Audio before wash: %d bytes\n", len(audioData))
 	cleaned := e.cleanAudioWithFFmpeg(audioData)
+	fmt.Printf("[Ear] Audio after wash: %d bytes (Removed %d bytes)\n", len(cleaned), len(audioData)-len(cleaned))
 	prof.AddSpan("STT_Wash", time.Since(start))
 
 	whisperStart := time.Now()
