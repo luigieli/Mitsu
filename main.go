@@ -27,6 +27,9 @@ func tlog(format string, a ...interface{}) {
 
 var isMitsuSpeaking atomic.Bool
 var currentLang string
+var earLangChan chan string
+var brainLangChan chan string
+var mouthLangChan chan string
 var clearMemoryChan chan struct{}
 var activeVoiceConfig mouth.VoiceConfig
 var gameController *gaming.GameController
@@ -39,6 +42,9 @@ func main() {
 	langFlag := flag.String("lang", "en", "Language to use (en or pt)")
 	flag.Parse()
 	currentLang = *langFlag
+	earLangChan = make(chan string, 1)
+	brainLangChan = make(chan string, 1)
+	mouthLangChan = make(chan string, 1)
 	clearMemoryChan = make(chan struct{}, 1)
 
 	// Load voice config from Lab
@@ -69,13 +75,14 @@ func main() {
 		sttURL = "http://localhost:5001"
 	}
 	mitsuEar := &ear.Ear{
-		STTURL:          sttURL,
-		CurrentLang:     currentLang,
-		IsMitsuSpeaking: &isMitsuSpeaking,
-		SpeechToBrain:   speechToBrain,
-		UiMessages:      broker.messages,
-		InputDevice:     "", // Use default (let qpwgraph handle it)
-		TestInput:       os.Getenv("TEST_INPUT_FILE"),
+		STTURL:             sttURL,
+		CurrentLang:        currentLang,
+		LanguageChangeChan: earLangChan,
+		IsMitsuSpeaking:    &isMitsuSpeaking,
+		SpeechToBrain:      speechToBrain,
+		UiMessages:         broker.messages,
+		InputDevice:        "", // Use default (let qpwgraph handle it)
+		TestInput:          os.Getenv("TEST_INPUT_FILE"),
 	}
 
 	ollamaURL := os.Getenv("OLLAMA_HOST")
@@ -83,12 +90,13 @@ func main() {
 		ollamaURL = "http://localhost:11434"
 	}
 	mitsuBrain := &brain.Brain{
-		OllamaURL:       ollamaURL,
-		CurrentLang:     currentLang,
-		SpeechToBrain:   speechToBrain,
-		BrainToMouth:    brainToMouth,
-		UiMessages:      broker.messages,
-		ClearMemoryChan: clearMemoryChan,
+		OllamaURL:          ollamaURL,
+		CurrentLang:        currentLang,
+		LanguageChangeChan: brainLangChan,
+		SpeechToBrain:      speechToBrain,
+		BrainToMouth:       brainToMouth,
+		UiMessages:         broker.messages,
+		ClearMemoryChan:    clearMemoryChan,
 	}
 
 	kokoroURL := os.Getenv("KOKORO_HOST")
@@ -96,20 +104,41 @@ func main() {
 		kokoroURL = "http://kokoro:8880"
 	}
 	mitsuMouth := &mouth.Mouth{
-		KokoroURL:       kokoroURL,
-		CurrentLang:     currentLang,
-		ActiveConfig:    activeVoiceConfig,
-		IsMitsuSpeaking: &isMitsuSpeaking,
-		BrainToMouth:    brainToMouth,
-		BargeIn:         bargeIn,
-		KokoroVoiceAmy:  KokoroVoiceAmy,
-		OutputDevice:    "", // Use default (let qpwgraph handle it)
-		TestOutput:      os.Getenv("TEST_OUTPUT_FILE"),
+		KokoroURL:          kokoroURL,
+		CurrentLang:        currentLang,
+		LanguageChangeChan: mouthLangChan,
+		ActiveConfig:       activeVoiceConfig,
+		IsMitsuSpeaking:    &isMitsuSpeaking,
+		BrainToMouth:       brainToMouth,
+		BargeIn:            bargeIn,
+		KokoroVoiceAmy:     KokoroVoiceAmy,
+		OutputDevice:       "", // Use default (let qpwgraph handle it)
+		TestOutput:         os.Getenv("TEST_OUTPUT_FILE"),
 	}
 
 	go mitsuEar.Start(ctx)
 	go mitsuBrain.Start()
 	go mitsuMouth.Start(ctx)
+
+	// Background WarmUp check with vocal alert
+	go func() {
+		time.Sleep(3 * time.Second) // Wait for Kokoro/Ollama services to be up
+		
+		err := mitsuBrain.WarmUp(func() {
+			thinkingMsg := "Hmmm, let me think about that."
+			if currentLang == "pt" {
+				thinkingMsg = "Hmmm, deixa eu ver."
+			}
+			tlog("Brain: Models not in GPU, playing alert and loading...")
+			mitsuMouth.Alert(thinkingMsg, currentLang)
+		})
+
+		if err != nil {
+			tlog("Brain WarmUp error: %v", err)
+		} else {
+			tlog("Brain is ready.")
+		}
+	}()
 
 	go startWebServer(speechToBrain, broker)
 
@@ -164,6 +193,10 @@ func startWebServer(speechToBrain common.SpeechText, b *Broker) {
     <div id="header">
         <h1>MITSU COMMAND CENTER</h1>
         <div id="status" class="off">IDLE</div>
+        <div>
+            <button onclick="hotswap('en')" style="background: #0088ff;">EN</button>
+            <button onclick="hotswap('pt')" style="background: #00cc00;">PT</button>
+        </div>
         <button onclick="toggleGaming()" class="game-btn" id="gameBtn">GAMER MODE: OFF</button>
     </div>
     <div id="terminal"></div>
@@ -180,6 +213,9 @@ func startWebServer(speechToBrain common.SpeechText, b *Broker) {
             div.textContent = prefix + msg;
             t.appendChild(div);
             t.scrollTop = t.scrollHeight;
+        }
+        function hotswap(lang) {
+            fetch("/hotswap?lang=" + lang);
         }
         const eventSource = new EventSource("/events");
         eventSource.onmessage = function(e) {
@@ -213,11 +249,29 @@ func startWebServer(speechToBrain common.SpeechText, b *Broker) {
 		if text != "" {
 			speechToBrain <- common.SpeechEntry{
 				Text:      text,
-				Language:  "en", // Default for web text input
+				Language:  currentLang, // Use the current hotswapped language
 				Timestamp: time.Now(),
 				Profile:   common.NewProfile(),
 			}
 			fmt.Fprint(w, "OK")
+		}
+	})
+
+	http.HandleFunc("/hotswap", func(w http.ResponseWriter, r *http.Request) {
+		lang := r.URL.Query().Get("lang")
+		if lang == "en" || lang == "pt" {
+			currentLang = lang
+			// Broadcast to all specialized channels
+			select { case earLangChan <- lang: default: }
+			select { case brainLangChan <- lang: default: }
+			select { case mouthLangChan <- lang: default: }
+
+			msg, _ := json.Marshal(map[string]string{"text": "HOTSWAP: Switched to " + lang, "type": "status"})
+			b.messages <- string(msg)
+			fmt.Fprintf(w, "Switched to %s", lang)
+			tlog("Language hotswapped to %s", lang)
+		} else {
+			http.Error(w, "Invalid language", 400)
 		}
 	})
 
