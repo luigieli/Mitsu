@@ -59,6 +59,7 @@ type LLMEntry struct {
 	Text          string
 	InputLanguage string // The language the user spoke
 	Profile       *Profile
+	Done          bool // True if this is the last chunk of a response
 }
 
 type SpeechText chan SpeechEntry
