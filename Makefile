@@ -63,7 +63,7 @@ dev: mic-setup
 
 setup-model:
 	@echo "Creating Mitsu personas in Ollama..."
-	docker-compose exec -T ollama ollama pull llama3.2:3b || true
+	docker-compose exec -T ollama ollama pull qwen2.5:3b || true
 	docker-compose cp Modelfile.en ollama:/Modelfile.en
 	docker-compose cp Modelfile.pt ollama:/Modelfile.pt
 	docker-compose exec -T ollama ollama create mitsu-en -f /Modelfile.en
@@ -71,6 +71,10 @@ setup-model:
 
 monitor:
 	@echo "Manual routing required via qpwgraph. Connect Mitsu_Mouth to your playback device."
+
+analyze-mic:
+	@echo "Initializing Mic Analyzer..."
+	uv run --with numpy scripts/mic_analyzer.py
 
 test:
 	@echo "Running Go unit tests..."
