@@ -11,32 +11,49 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/abadojack/whatlanggo"
 	"github.com/maxhawkins/go-webrtcvad"
 )
 
 type Ear struct {
-	STTURL          string
-	CurrentLang     string
-	IsMitsuSpeaking *atomic.Bool
-	SpeechToBrain   common.SpeechText
-	UiMessages      chan string
-	InputDevice     string
-	TestInput       string 
+	STTURL             string
+	mu                 sync.RWMutex
+	CurrentLang        string
+	LanguageChangeChan chan string
+	IsMitsuSpeaking    *atomic.Bool
+	SpeechToBrain      common.SpeechText
+	UiMessages         chan string
+	InputDevice        string
+	TestInput          string 
 }
 
 func (e *Ear) Start(ctx context.Context) {
 	fmt.Printf("Ear Routine started with Hybrid Go-VAD Pipeline (Ruthless Profile)\n")
+
+	// Background listener for language hotswaps
+	go func() {
+		for {
+			select {
+			case newLang := <-e.LanguageChangeChan:
+				e.mu.Lock()
+				fmt.Printf("Ear: Hotswapping language to %s\n", newLang)
+				e.CurrentLang = newLang
+				e.mu.Unlock()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	vad, err := webrtcvad.New()
 	if err != nil {
 		fmt.Printf("Error creating VAD: %v\n", err)
 		return
 	}
-	vad.SetMode(1)
+	vad.SetMode(3)
 
 	const (
 		sampleRate      = 16000
@@ -59,7 +76,7 @@ func (e *Ear) Start(ctx context.Context) {
 			args := []string{
 				"-f", "pulse", "-name", "Mitsu_Ear", "-i", "default",
 				"-ar", "16000", "-ac", "1",
-				"-af", "highpass=f=200",
+				"-af", "highpass=f=80",
 				"-f", "s16le", "pipe:1",
 				"-v", "error",
 			}
@@ -128,7 +145,13 @@ func (e *Ear) Start(ctx context.Context) {
 func (e *Ear) cleanAudioWithFFmpeg(inputData []byte) []byte {
 	cmd := exec.Command("ffmpeg",
 		"-f", "s16le", "-ar", "16000", "-ac", "1", "-i", "pipe:0",
-		"-af", "silenceremove=start_periods=1:start_threshold=-35dB:stop_periods=-1:stop_duration=0.3:stop_threshold=-35dB",
+		// THE MAGIC FILTER (RELAXED):
+		// 1. highpass=f=80: Lower cutoff to preserve more voice depth.
+		// 2. start_periods=1: Remove start silence.
+		// 3. stop_periods=-1: RECURSIVE REMOVAL. Removes ALL silence detected.
+		// 4. stop_duration=0.4: Slightly more breathing room between words.
+		// 5. threshold=-35dB: Much more sensitive to catch quiet speech.
+		"-af", "highpass=f=80,silenceremove=start_periods=1:start_threshold=-35dB:stop_periods=-1:stop_duration=0.4:stop_threshold=-35dB",
 		"-fflags", "+bitexact", "-f", "wav", "pipe:1",
 		"-v", "error",
 	)
@@ -173,11 +196,20 @@ func (e *Ear) transcribe(ctx context.Context, audioData []byte, prof *common.Pro
 	}
 	json.NewDecoder(resp.Body).Decode(&result)
 
+	// DEBUG: Show exactly what was captured by the STT
+	fmt.Printf("[Ear] RAW STT: \"%s\"\n", result.Text)
+
 	if result.Text != "" {
 		text := e.ApplyFuzzyNameCorrection(result.Text)
-		info := whatlanggo.Detect(text)
-		detectedLang := "en"
-		if info.Lang == whatlanggo.Por { detectedLang = "pt" }
+		
+		// Use the hotswapped language strictly (thread-safe)
+		e.mu.RLock()
+		detectedLang := e.CurrentLang
+		e.mu.RUnlock()
+		
+		if detectedLang == "" {
+			detectedLang = "en" // Absolute fallback
+		}
 
 		fmt.Printf("Captured (%s): %s\n", detectedLang, text)
 		msg, _ := json.Marshal(map[string]string{"text": text, "type": "mic"})
