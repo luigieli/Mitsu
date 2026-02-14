@@ -27,11 +27,21 @@ type Ear struct {
 	SpeechToBrain      common.SpeechText
 	UiMessages         chan string
 	InputDevice        string
-	TestInput          string 
+	TestInput          string
 }
 
 func (e *Ear) Start(ctx context.Context) {
 	fmt.Printf("Ear Routine started with Hybrid Go-VAD Pipeline (Ruthless Profile)\n")
+
+	// Sync initial language with STT server
+	go func() {
+		e.mu.RLock()
+		lang := e.CurrentLang
+		e.mu.RUnlock()
+		if lang != "" {
+			http.Post(e.STTURL+"/swap/"+lang, "application/json", nil)
+		}
+	}()
 
 	// Background listener for language hotswaps
 	go func() {
@@ -42,6 +52,13 @@ func (e *Ear) Start(ctx context.Context) {
 				fmt.Printf("Ear: Hotswapping language to %s\n", newLang)
 				e.CurrentLang = newLang
 				e.mu.Unlock()
+				// Notify STT Server of the swap
+				go func(lang string) {
+					_, err := http.Post(e.STTURL+"/swap/"+lang, "application/json", nil)
+					if err != nil {
+						fmt.Printf("Ear Error: Failed to notify STT server of swap: %v\n", err)
+					}
+				}(newLang)
 			case <-ctx.Done():
 				return
 			}
@@ -61,7 +78,7 @@ func (e *Ear) Start(ctx context.Context) {
 		frameSize       = sampleRate * frameDurationMs / 1000
 		byteSize        = frameSize * 2
 		// 1.02s Silence = End of Phrase
-		silenceLimit    = 34 
+		silenceLimit    = 34
 	)
 
 	for {
@@ -122,14 +139,14 @@ func (e *Ear) Start(ctx context.Context) {
 					// Trigger on silence
 					if silenceCounter >= silenceLimit {
 						fmt.Printf("VAD: Sentence finished. Buffer: %d bytes\n", len(speechBuffer))
-						
+
 						if len(speechBuffer) > sampleRate {
 							finalBuffer := make([]byte, len(speechBuffer))
 							copy(finalBuffer, speechBuffer)
 							prof := common.NewProfile()
 							go e.transcribe(ctx, finalBuffer, prof)
 						}
-						
+
 						speechBuffer = nil
 						isSpeaking = false
 						silenceCounter = 0
@@ -201,12 +218,12 @@ func (e *Ear) transcribe(ctx context.Context, audioData []byte, prof *common.Pro
 
 	if result.Text != "" {
 		text := e.ApplyFuzzyNameCorrection(result.Text)
-		
+
 		// Use the hotswapped language strictly (thread-safe)
 		e.mu.RLock()
 		detectedLang := e.CurrentLang
 		e.mu.RUnlock()
-		
+
 		if detectedLang == "" {
 			detectedLang = "en" // Absolute fallback
 		}
