@@ -12,6 +12,7 @@ services:
       - "988"
     environment:
       - OLLAMA_VULKAN=1
+      - OLLAMA_KEEP_ALIVE=-1
 
   # Service 2: The Voice (Kokoro TTS API)
   kokoro:
@@ -26,10 +27,6 @@ services:
       dockerfile: Dockerfile.stt
     ports:
       - "5001:5001"
-    deploy:
-      resources:
-        limits:
-          cpus: '4'
     volumes:
       - ./whisper_cache:/root/.cache/huggingface
     environment:
