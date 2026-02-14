@@ -12,12 +12,13 @@ import (
 )
 
 type Brain struct {
-	OllamaURL       string
-	CurrentLang     string
-	SpeechToBrain   common.SpeechText
-	BrainToMouth    common.LLMResponse
-	UiMessages      chan string
-	ClearMemoryChan chan struct{}
+	OllamaURL          string
+	CurrentLang        string
+	LanguageChangeChan chan string
+	SpeechToBrain      common.SpeechText
+	BrainToMouth       common.LLMResponse
+	UiMessages         chan string
+	ClearMemoryChan    chan struct{}
 }
 
 type ChatMessage struct {
@@ -38,6 +39,72 @@ type OllamaChatResponse struct {
 	Done      bool        `json:"done"`
 }
 
+type OllamaPsResponse struct {
+	Models []struct {
+		Name string `json:"name"`
+	} `json:"models"`
+}
+
+func (b *Brain) WarmUp(onLoading func()) error {
+	fmt.Printf("Brain: Checking model status...\n")
+	
+	modelsToLoad := []string{"mitsu-en", "mitsu-pt"}
+	actuallyNeedsLoading := false
+
+	// Check /api/ps to see what's currently resident
+	resp, err := http.Get(b.OllamaURL + "/api/ps")
+	if err == nil {
+		var ps OllamaPsResponse
+		if err := json.NewDecoder(resp.Body).Decode(&ps); err == nil {
+			resp.Body.Close()
+			
+			// Simple check: are both models there?
+			for _, mName := range modelsToLoad {
+				found := false
+				for _, m := range ps.Models {
+					if strings.HasPrefix(m.Name, mName) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					actuallyNeedsLoading = true
+					break
+				}
+			}
+		}
+	} else {
+		actuallyNeedsLoading = true // Can't check, assume we need to try loading
+	}
+
+	if !actuallyNeedsLoading {
+		fmt.Println("Brain: All models already resident in GPU.")
+		return nil
+	}
+
+	// Trigger the vocal alert if provided
+	if onLoading != nil {
+		onLoading()
+	}
+
+	for _, m := range modelsToLoad {
+		fmt.Printf("Brain: Pre-loading model %s into GPU...\n", m)
+		reqBody, _ := json.Marshal(OllamaChatRequest{
+			Model:    m,
+			Messages: []ChatMessage{{Role: "user", Content: "hi"}},
+			Stream:   false,
+		})
+		resp, err := http.Post(b.OllamaURL+"/api/chat", "application/json", bytes.NewBuffer(reqBody))
+		if err != nil {
+			fmt.Printf("Warning: Failed to load %s: %v\n", m, err)
+			continue
+		}
+		resp.Body.Close()
+	}
+
+	return nil
+}
+
 func (b *Brain) Start() {
 	fmt.Println("Brain Routine started with Streaming Overlap.")
 	history := []ChatMessage{}
@@ -45,6 +112,12 @@ func (b *Brain) Start() {
 
 	for {
 		select {
+		case newLang := <-b.LanguageChangeChan:
+			fmt.Printf("Brain: Hotswapping language to %s\n", newLang)
+			b.CurrentLang = newLang
+			// Optional: Clear memory on language swap to prevent mixing personas
+			history = []ChatMessage{}
+			continue
 		case <-b.ClearMemoryChan:
 			fmt.Println("Brain: Memory cleared.")
 			history = []ChatMessage{}
@@ -95,6 +168,9 @@ func (b *Brain) Start() {
 			var fullResponseBuilder strings.Builder
 			var sentenceBuilder strings.Builder
 			firstSentenceDone := false
+			
+			// Lock in the language for this entire response to prevent voice-switching mid-stream
+			responseLanguage := entry.Language
 
 			for {
 				line, err := reader.ReadBytes('\n')
@@ -114,16 +190,20 @@ func (b *Brain) Start() {
 				// Check for sentence boundary (punctuation found)
 				if strings.ContainsAny(token, splitters) {
 					sentence := strings.TrimSpace(sentenceBuilder.String())
-					if len(sentence) > 2 {
+					words := strings.Fields(sentence)
+
+					// Minimum words to avoid weird fragmentation (e.g., "Ai, ai, ai!")
+					// We also want to send it if it's been building up for a while
+					if len(words) >= 3 {
 						if !firstSentenceDone {
 							entry.Profile.AddSpan("Brain_TTFS", time.Since(brainStart))
 							firstSentenceDone = true
 						}
-						
+
 						// Send chunk to Mouth
 						b.BrainToMouth <- common.LLMEntry{
 							Text:          sentence,
-							InputLanguage: entry.Language,
+							InputLanguage: responseLanguage,
 							Profile:       entry.Profile,
 							Done:          false,
 						}
@@ -140,9 +220,13 @@ func (b *Brain) Start() {
 			// Send remaining buffer if any, marking it as Done
 			leftover := strings.TrimSpace(sentenceBuilder.String())
 			if len(leftover) > 0 {
+				if !firstSentenceDone {
+					entry.Profile.AddSpan("Brain_TTFS", time.Since(brainStart))
+					firstSentenceDone = true
+				}
 				b.BrainToMouth <- common.LLMEntry{
 					Text:          leftover,
-					InputLanguage: entry.Language,
+					InputLanguage: responseLanguage,
 					Profile:       entry.Profile,
 					Done:          true,
 				}
@@ -150,7 +234,7 @@ func (b *Brain) Start() {
 				// If no leftover, send an empty Done signal to close the loop
 				b.BrainToMouth <- common.LLMEntry{
 					Text:          "",
-					InputLanguage: entry.Language,
+					InputLanguage: responseLanguage,
 					Profile:       entry.Profile,
 					Done:          true,
 				}
