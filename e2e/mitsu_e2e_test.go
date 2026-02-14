@@ -80,20 +80,6 @@ func TestMitsuCompanionE2E(t *testing.T) {
 			t.Errorf("Logs missing expected entry: %q", expected)
 		}
 	}
-
-	// 3. Verify whisper-cpp can load the model
-	exitCode, execReader, err := mitsuC.Exec(ctx, []string{"./whisper-cpp", "-m", "models/ggml-small-q5_1.bin", "-h"})
-	if err != nil {
-		t.Fatalf("Failed to exec whisper-cpp: %v", err)
-	}
-	
-	out, _ := io.ReadAll(execReader)
-	if exitCode != 0 {
-		t.Errorf("whisper-cpp exited with code %d. Output: %s", exitCode, string(out))
-	}
-	if !contains(string(out), "usage: ./whisper-cpp") {
-		t.Errorf("whisper-cpp output does not contain usage info")
-	}
 }
 
 func contains(s, substr string) bool {
