@@ -1,7 +1,6 @@
 package mouth
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -25,7 +24,7 @@ type Mouth struct {
 	BargeIn         chan struct{}
 	KokoroVoiceAmy  string
 	OutputDevice    string
-	TestOutput      string // Path to a wav file to save output for testing
+	TestOutput      string 
 }
 
 // Voice Configuration from Lab
@@ -55,7 +54,7 @@ func (m *Mouth) BuildFilterChain(f VoiceConfig) string {
 }
 
 func (m *Mouth) Start(ctx context.Context) {
-	fmt.Println("Mouth Routine started with Streaming Sequential Support.")
+	fmt.Println("Mouth Routine started with Parallel Streaming Support.")
 
 	pr, pw := io.Pipe()
 
@@ -83,27 +82,18 @@ func (m *Mouth) Start(ctx context.Context) {
 		select {
 		case entry := <-m.BrainToMouth:
 			sentence := entry.Text
-			
-			// Always ensure speaking is true when we get data
 			m.IsMitsuSpeaking.Store(true)
 
 			if sentence != "" {
-				// 1. Detect the ACTUAL language of the chunk
+				// 1. Voice Selection
 				info := whatlanggo.Detect(sentence)
 				detectedLang := "en"
 				if info.Lang == whatlanggo.Por {
 					detectedLang = "pt"
-				} else if info.Lang == whatlanggo.Eng {
-					detectedLang = "en"
-				} else {
+				} else if len(strings.Split(sentence, " ")) < 5 {
 					detectedLang = entry.InputLanguage
 				}
 
-				if len(strings.Split(sentence, " ")) < 5 {
-					detectedLang = entry.InputLanguage
-				}
-
-				// 2. Select Voice
 				voice := "mitsu_anime_en"
 				langCode := "a"
 				if detectedLang == "pt" {
@@ -119,37 +109,37 @@ func (m *Mouth) Start(ctx context.Context) {
 					"model":     "kokoro",
 				})
 
-				ttsStart := time.Now()
-				resp, err := http.Post(m.KokoroURL+"/v1/audio/speech", "application/json", bytes.NewBuffer(reqBody))
+				// 2. Start Request & Profile Startup
+				audioStart := time.Now()
+				resp, err := http.Post(m.KokoroURL+"/v1/audio/speech", "application/json", strings.NewReader(string(reqBody)))
 				if err != nil {
 					fmt.Printf("Kokoro Error: %v\n", err)
 					continue
 				}
-				
-				audioData, err := io.ReadAll(resp.Body)
-				resp.Body.Close()
-				if err != nil {
-					continue
-				}
-				entry.Profile.AddSpan("TTS_Chunk", time.Since(ttsStart))
 
+				// 3. Parallel Filtering: Stream Body -> FFmpeg -> pacat
 				filterChain := m.BuildFilterChain(m.ActiveConfig)
-				audioStart := time.Now()
-				convCmd := exec.CommandContext(ctx, "ffmpeg", "-i", "pipe:0", "-af", filterChain, "-f", "s16le", "-ar", "24000", "-ac", "1", "pipe:1")
-				convCmd.Stdin = bytes.NewReader(audioData)
+				// We add -threads 1 to reduce startup overhead
+				convCmd := exec.CommandContext(ctx, "ffmpeg", "-threads", "1", "-i", "pipe:0", "-af", filterChain, "-f", "s16le", "-ar", "24000", "-ac", "1", "pipe:1", "-v", "error")
+				convCmd.Stdin = resp.Body
 				stdout, _ := convCmd.StdoutPipe()
 
 				if err := convCmd.Start(); err != nil {
+					resp.Body.Close()
 					continue
 				}
 
 				fmt.Printf("Mitsu speaking: \"%s\"\n", sentence)
-				io.Copy(pw, stdout)
+				
+				// Monitor first byte to measure real lag
+				monitor := &latencyMonitor{r: stdout, prof: entry.Profile, start: audioStart}
+				io.Copy(pw, monitor)
+				
 				convCmd.Wait()
-				entry.Profile.AddSpan("AudioPost_Chunk", time.Since(audioStart))
+				resp.Body.Close()
+				entry.Profile.AddSpan("Audio_Finish_Chunk", time.Since(audioStart))
 			}
 
-			// If this is the last chunk, we can finally stop speaking and report
 			if entry.Done {
 				m.IsMitsuSpeaking.Store(false)
 				fmt.Println("Mitsu finished entire response.")
@@ -162,4 +152,21 @@ func (m *Mouth) Start(ctx context.Context) {
 			return
 		}
 	}
+}
+
+type latencyMonitor struct {
+	r     io.Reader
+	prof  *common.Profile
+	start time.Time
+	done  bool
+}
+
+func (l *latencyMonitor) Read(p []byte) (n int, err error) {
+	n, err = l.r.Read(p)
+	if n > 0 && !l.done {
+		// This measures how long it took from Request to first Sound hitting the pipe
+		l.prof.AddSpan("Audio_Lag_Chunk", time.Since(l.start))
+		l.done = true
+	}
+	return n, err
 }
