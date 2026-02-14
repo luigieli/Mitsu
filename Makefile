@@ -14,23 +14,9 @@ export XDG_RUNTIME_DIR
 export HOME
 export MITSU_LANG
 
-build: check-binaries
+build:
 	@echo "Building Docker images..."
 	docker-compose build
-
-check-binaries:
-	@if [ ! -f whisper-cpp ]; then \
-		echo "whisper-cpp not found! Building it once via Docker..."; \
-		docker run --rm -v $(shell pwd):/out ubuntu:22.04 sh -c "\
-			apt-get update && apt-get install -y gcc g++ make git cmake curl gnupg2 && \
-			curl -fsSL https://packages.lunarg.com/lunarg-signing-key-pub.asc | gpg --dearmor -o /usr/share/keyrings/lunarg-vulkan.gpg && \
-			echo 'deb [signed-by=/usr/share/keyrings/lunarg-vulkan.gpg] https://packages.lunarg.com/vulkan jammy main' > /etc/apt/sources.list.d/lunarg-vulkan.list && \
-			apt-get update && apt-get install -y vulkan-sdk && \
-			git clone https://github.com/ggerganov/whisper.cpp.git && \
-			cd whisper.cpp && cmake -B build -DGGML_VULKAN=1 -DBUILD_SHARED_LIBS=OFF && \
-			cmake --build build --config Release --target whisper-cli && \
-			cp build/bin/whisper-cli /out/whisper-cpp"; \
-	fi
 
 up:
 	@echo "Starting services [LANG=$(MITSU_LANG)]..."
@@ -68,6 +54,12 @@ clean:
 	docker rmi $$(docker images -aq -f "dangling=true") 2>/dev/null || true
 
 run: mic-setup build up setup-model
+
+dev: mic-setup
+	@echo "Starting backend services..."
+	docker-compose up -d ollama kokoro stt
+	@echo "Running Mitsu locally with Hot-Reload (air)..."
+	mise x -- air
 
 setup-model:
 	@echo "Creating Mitsu personas in Ollama..."

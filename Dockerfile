@@ -26,12 +26,4 @@ RUN echo 'pcm.!default { type pulse }' > /etc/asound.conf && \
 # Copy binary from builder
 COPY --from=builder /app/companion .
 
-# Copy PRE-BUILT whisper-cpp from host (Optimization!)
-# Ensure 'whisper-cpp' exists on host before building
-COPY whisper-cpp ./whisper-cpp
-
-# Models are mapped via volumes or downloaded at runtime to keep image small
-# but for now we copy if they exist in models/
-COPY models/ ./models/
-
 CMD ["./companion"]

@@ -1,11 +1,44 @@
+# Version Control
+.git/
+.gitignore
+
+# Data and Models
+# These are mapped via volumes or managed internally by containers.
 ollama_data/
 kokoro_data/
+whisper_cache/
+models/
+
+# Temporary and Build Artifacts
 .gemini/
-*.pt
-*.bin
+.mise/
+bin/
+tmp/
+companion
+mitsu_binary
+whisper-cpp
 *.wav
 *.raw
+*.log
+*.txt
+*.bin
+*.pt
+*.onnx
+
+# Project Management
 Todo.md
-docker-compose.yml
-Dockerfile
+tasks/
+GAMING.md
+
+# Docker Configs (Ignore except for the ones needed for context)
+# docker-compose.yml
+# Dockerfile
+# Dockerfile.stt
+.dockerignore
+
+# Local Scripts
 download_models.sh
+voice_lab.py
+test_voice.py
+generate_test_wav.py
+test.go
