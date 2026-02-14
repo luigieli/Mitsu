@@ -64,3 +64,7 @@ type LLMEntry struct {
 
 type SpeechText chan SpeechEntry
 type LLMResponse chan LLMEntry
+
+type GlobalState struct {
+	LanguageChan chan string
+}
