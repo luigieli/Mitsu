@@ -1,6 +1,7 @@
 package ear
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -76,9 +77,33 @@ type EarExecution struct {
 
 // EarPipeline holds the data channels and VAD state.
 type EarPipeline struct {
+	Data   *PipelineData
+	Status *PipelineStatus
+}
+
+// PipelineData manages data flow channels.
+type PipelineData struct {
 	SpeechToBrain common.SpeechChannel
 	UiMessages    chan string
-	IsSilenced    atomic.Bool
+}
+
+// PipelineStatus manages the operational state of the pipeline.
+type PipelineStatus struct {
+	IsSilenced atomic.Bool
+}
+
+type audioSession struct {
+	Activity *SessionActivity
+	Buffer   *SessionBuffer
+}
+
+type SessionActivity struct {
+	isSpeaking     bool
+	silenceCounter int
+}
+
+type SessionBuffer struct {
+	data []byte
 }
 
 // EarStreaming manages the streaming transcription state.
@@ -145,7 +170,7 @@ func (ear *Ear) listenForSpeakingChanges(applicationContext context.Context) {
 func (ear *Ear) handleSpeakingChange(applicationContext context.Context, speakingChannel chan bool) bool {
 	select {
 	case isSpeaking := <-speakingChannel:
-		ear.Execution.Pipeline.IsSilenced.Store(isSpeaking)
+		ear.Execution.Pipeline.Status.IsSilenced.Store(isSpeaking)
 		return false
 	case <-applicationContext.Done():
 		return true
@@ -254,9 +279,8 @@ func (ear *Ear) handleMessageData(data []byte) {
 }
 
 func (ear *Ear) handleTranscriptionResult(text string, isFinal bool) {
+	// If it's final, we now rely on the Whisper second pass performed in onSilenceDetected
 	if isFinal {
-		fmt.Printf("SpeechToText (Final): %s\n", text)
-		ear.dispatchTranscription(text, common.NewProfile())
 		return
 	}
 	ear.notifyUI(text, UIMessageTypeMic)
@@ -338,50 +362,87 @@ func (ear *Ear) processAudioStream(reader io.Reader, voiceActivityDetector *webr
 	}
 
 	audioBuffer := make([]byte, byteSize)
-	currentSession := &audioSession{silenceLimit: silenceLimit}
+	currentSession := &audioSession{
+		Activity: &SessionActivity{},
+		Buffer:   &SessionBuffer{data: make([]byte, 0, AudioByteSize*SilenceLimit*2)},
+	}
 
 	for {
 		if _, readError := io.ReadFull(reader, audioBuffer); readError != nil { break }
-		if ear.Execution.Pipeline.IsSilenced.Load() { continue }
+		if ear.Execution.Pipeline.Status.IsSilenced.Load() { continue }
 
 		isSpeech, _ := voiceActivityDetector.Process(SampleRate, audioBuffer)
-		ear.handleAudioFrame(currentSession, audioBuffer, isSpeech)
+		ear.handleAudioFrame(currentSession, audioBuffer, isSpeech, silenceLimit)
 	}
 }
 
-type audioSession struct {
-	isSpeaking     bool
-	silenceCounter int
-	silenceLimit   int
-}
-
-func (ear *Ear) handleAudioFrame(session *audioSession, chunk []byte, isSpeech bool) {
+func (ear *Ear) handleAudioFrame(session *audioSession, chunk []byte, isSpeech bool, silenceLimit int) {
 	if isSpeech {
 		ear.onSpeechDetected(session, chunk)
 		return
 	}
 
-	if session.isSpeaking {
-		ear.onSilenceDetected(session)
+	if session.Activity.isSpeaking {
+		ear.onSilenceDetected(session, silenceLimit)
 	}
 }
 
 func (ear *Ear) onSpeechDetected(session *audioSession, chunk []byte) {
-	if !session.isSpeaking {
-		session.isSpeaking = true
+	if !session.Activity.isSpeaking {
+		session.Activity.isSpeaking = true
 		fmt.Println("VAD: Speech started.")
 	}
+	session.Buffer.data = append(session.Buffer.data, chunk...)
 	ear.sendToWebSocket(chunk, false)
-	session.silenceCounter = 0
+	session.Activity.silenceCounter = 0
 }
 
-func (ear *Ear) onSilenceDetected(session *audioSession) {
-	session.silenceCounter++
-	if session.silenceCounter >= session.silenceLimit {
+func (ear *Ear) onSilenceDetected(session *audioSession, silenceLimit int) {
+	session.Activity.silenceCounter++
+	if session.Activity.silenceCounter >= silenceLimit {
 		fmt.Printf("VAD: Sentence finished.\n")
 		ear.sendToWebSocket(nil, true)
-		session.isSpeaking = false
-		session.silenceCounter = 0
+		
+		// Hybrid STT: Call Faster-Whisper for final high-accuracy transcription
+		go ear.performFinalTranscription(session.Buffer.data)
+
+		session.Activity.isSpeaking = false
+		session.Activity.silenceCounter = 0
+		session.Buffer.data = make([]byte, 0, AudioByteSize*silenceLimit*2)
+	}
+}
+
+func (ear *Ear) performFinalTranscription(audioBuffer []byte) {
+	if len(audioBuffer) == 0 {
+		return
+	}
+
+	url := string(ear.Configuration.Connectivity.SpeechToTextURL) + "/transcribe"
+	request, _ := http.NewRequest("POST", url, bytes.NewReader(audioBuffer))
+	request.Header.Set("Content-Type", "application/octet-stream")
+	
+	sttStart := time.Now()
+	client := &http.Client{Timeout: 10 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		fmt.Printf("Ear Error: Final transcription request failed: %v\n", err)
+		return
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		fmt.Printf("Ear Error: STT server returned status %d\n", response.StatusCode)
+		return
+	}
+
+	var result struct {
+		Text     string `json:"text"`
+		Language string `json:"language"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err == nil && result.Text != "" {
+		profile := common.NewProfile()
+		profile.AddSpan("STT_Latency", time.Since(sttStart))
+		ear.dispatchTranscription(result.Text, common.Language(result.Language), profile)
 	}
 }
 
@@ -400,13 +461,12 @@ func (ear *Ear) sendToWebSocket(data []byte, flush bool) {
 	connection.WriteMessage(websocket.BinaryMessage, data)
 }
 
-func (ear *Ear) dispatchTranscription(text string, profile *common.Profile) {
+func (ear *Ear) dispatchTranscription(text string, language common.Language, profile *common.Profile) {
 	text = ear.ApplyFuzzyNameCorrection(text)
-	language := ear.Execution.Streaming.CurrentLanguage.Load().(common.Language)
 
 	fmt.Printf("Captured (%s): %s\n", language, text)
 	ear.notifyUI(text, UIMessageTypeMic)
-	ear.Execution.Pipeline.SpeechToBrain <- common.SpeechEntry{
+	ear.Execution.Pipeline.Data.SpeechToBrain <- common.SpeechEntry{
 		Details: common.SpeechDetails{
 			Text:     common.Transcription(text),
 			Language: language,
@@ -421,7 +481,7 @@ func (ear *Ear) dispatchTranscription(text string, profile *common.Profile) {
 func (ear *Ear) notifyUI(text, messageType string) {
 	message, _ := json.Marshal(map[string]string{"text": text, "type": messageType})
 	select {
-	case ear.Execution.Pipeline.UiMessages <- string(message):
+	case ear.Execution.Pipeline.Data.UiMessages <- string(message):
 	default:
 	}
 }

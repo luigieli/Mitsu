@@ -190,8 +190,11 @@ func (application *MitsuApp) initializeProcessing() {
 		},
 		Execution: &ear.EarExecution{
 			Pipeline: &ear.EarPipeline{
-				SpeechToBrain: application.State.System.Bus.Data.SpeechToBrain,
-				UiMessages:    application.State.System.Bus.Control.UiMessages,
+				Data: &ear.PipelineData{
+					SpeechToBrain: application.State.System.Bus.Data.SpeechToBrain,
+					UiMessages:    application.State.System.Bus.Control.UiMessages,
+				},
+				Status: &ear.PipelineStatus{},
 			},
 			Streaming: &ear.EarStreaming{
 				WebSocket: &ear.SynchronizedWebSocket{},

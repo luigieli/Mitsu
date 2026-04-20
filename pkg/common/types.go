@@ -3,6 +3,7 @@ package common
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,9 +25,10 @@ type Span struct {
 // Spans is a first-class collection for performance spans.
 type Spans []Span
 
-// PerformanceMetrics is a first-class collection containing only the Spans.
+// PerformanceMetrics is a first-class collection for performance spans.
 type PerformanceMetrics struct {
-	Data Spans
+	mutex sync.Mutex
+	data  Spans
 }
 
 // Add appends a new span to the metrics.
@@ -34,7 +36,9 @@ func (metrics *PerformanceMetrics) Add(name string, duration time.Duration) {
 	if metrics == nil {
 		return
 	}
-	metrics.Data = append(metrics.Data, Span{Name: name, Duration: duration})
+	metrics.mutex.Lock()
+	defer metrics.mutex.Unlock()
+	metrics.data = append(metrics.data, Span{Name: name, Duration: duration})
 }
 
 // Summary returns a string representation of the performance metrics.
@@ -42,10 +46,12 @@ func (metrics *PerformanceMetrics) Summary() string {
 	if metrics == nil {
 		return "No metrics available"
 	}
+	metrics.mutex.Lock()
+	defer metrics.mutex.Unlock()
 
 	var summaryBuilder strings.Builder
 	var totalDuration time.Duration
-	for _, span := range metrics.Data {
+	for _, span := range metrics.data {
 		summaryBuilder.WriteString(fmt.Sprintf("%s=%v ", span.Name, span.Duration.Round(time.Millisecond)))
 		totalDuration += span.Duration
 	}
@@ -62,7 +68,7 @@ type Profile struct {
 func NewProfile() *Profile {
 	return &Profile{
 		Metrics: &PerformanceMetrics{
-			Data: make(Spans, 0),
+			data: make(Spans, 0),
 		},
 	}
 }

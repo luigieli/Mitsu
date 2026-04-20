@@ -26,8 +26,11 @@ func TestEar_Start_Persistence(t *testing.T) {
 		},
 		Execution: &EarExecution{
 			Pipeline: &EarPipeline{
-				SpeechToBrain: speechToBrain,
-				UiMessages:    uiMessages,
+				Data: &PipelineData{
+					SpeechToBrain: speechToBrain,
+					UiMessages:    uiMessages,
+				},
+				Status: &PipelineStatus{},
 			},
 			Streaming: &EarStreaming{
 				WebSocket: &SynchronizedWebSocket{},

@@ -333,6 +333,8 @@ func (brain *Brain) processRequest(applicationContext context.Context, entry com
 	ollamaURL := brain.Configuration.Connectivity.OllamaURL
 	request, _ := http.NewRequestWithContext(applicationContext, "POST", string(ollamaURL)+OllamaAPIChat, bytes.NewBuffer(requestBody))
 	request.Header.Set("Content-Type", "application/json")
+
+	brainStart := time.Now()
 	response, ollamaError := http.DefaultClient.Do(request)
 	if ollamaError != nil {
 		fmt.Printf("Brain Error: %v\n", ollamaError)
@@ -340,7 +342,7 @@ func (brain *Brain) processRequest(applicationContext context.Context, entry com
 	}
 	defer response.Body.Close()
 
-	brain.streamResponse(response, entry)
+	brain.streamResponse(response, entry, brainStart)
 }
 
 func (brain *Brain) selectModel(entry common.SpeechEntry) string {
@@ -358,13 +360,13 @@ func (brain *Brain) updateHistory(message ChatMessage) {
 	}
 }
 
-func (brain *Brain) streamResponse(response *http.Response, entry common.SpeechEntry) {
+func (brain *Brain) streamResponse(response *http.Response, entry common.SpeechEntry, brainStart time.Time) {
 	if response.StatusCode != http.StatusOK {
 		fmt.Printf("Brain Error: Ollama returned status %d\n", response.StatusCode)
 		return
 	}
 
-	tokens := brain.consumeOllamaStream(response, entry)
+	tokens := brain.consumeOllamaStream(response, entry, brainStart)
 	aggregator := &sentenceAggregator{
 		onSentence: func(sentence string) { brain.dispatchSentence(sentence, entry, false) },
 	}
@@ -422,7 +424,7 @@ func (aggregator *sentenceAggregator) FlushRemaining() string {
 	return strings.TrimSpace(aggregator.buffer.String())
 }
 
-func (brain *Brain) consumeOllamaStream(response *http.Response, entry common.SpeechEntry) <-chan string {
+func (brain *Brain) consumeOllamaStream(response *http.Response, entry common.SpeechEntry, brainStart time.Time) <-chan string {
 	tokenChannel := make(chan string)
 	if response == nil || response.Body == nil {
 		close(tokenChannel)
@@ -433,7 +435,6 @@ func (brain *Brain) consumeOllamaStream(response *http.Response, entry common.Sp
 		defer close(tokenChannel)
 		defer response.Body.Close()
 		reader := bufio.NewReader(response.Body)
-		brainStart := time.Now()
 		firstTokenReceived := false
 
 		for {
