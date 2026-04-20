@@ -1,27 +1,46 @@
 package ear
 
 import (
+	"context"
+	"mitsu/pkg/common"
 	"testing"
+	"time"
 )
 
-func TestApplyFuzzyNameCorrection(t *testing.T) {
-	e := &Ear{}
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"Hello mitzo!", "Hello Mitsu!"},
-		{"Hello, mitzo!", "Hello, Mitsu!"},
-		{"mitso is here", "Mitsu is here"},
-		{"metsu?", "Mitsu?"},
-		{"I like mitsu", "I like Mitsu"},
-		{"nothing to change", "nothing to change"},
+func TestEar_Start_Persistence(t *testing.T) {
+	speechToBrain := make(common.SpeechChannel, 10)
+	languageState := common.NewLanguageState(common.LanguageEnglish)
+	uiMessages := make(chan string, 10)
+
+	earComponent := &Ear{
+		Configuration: &EarConfiguration{
+			Connectivity: &EarConnectivity{
+				SpeechToTextURL: "http://localhost:5001",
+			},
+			State: &EarState{
+				Language: languageState,
+				Device: &EarDevice{
+					TestInput: "/dev/zero",
+				},
+			},
+		},
+		Execution: &EarExecution{
+			Pipeline: &EarPipeline{
+				SpeechToBrain: speechToBrain,
+				UiMessages:    uiMessages,
+			},
+			Streaming: &EarStreaming{
+				WebSocket: &SynchronizedWebSocket{},
+			},
+		},
 	}
 
-	for _, tt := range tests {
-		result := e.ApplyFuzzyNameCorrection(tt.input)
-		if result != tt.expected {
-			t.Errorf("ApplyFuzzyNameCorrection(%q) = %q; want %q", tt.input, result, tt.expected)
-		}
-	}
+	applicationContext, cancelApplication := context.WithCancel(context.Background())
+	defer cancelApplication()
+
+	// This is a smoke test to ensure Start doesn't crash
+	go earComponent.Start(applicationContext)
+
+	time.Sleep(100 * time.Millisecond)
+	// Success if it didn't panic
 }

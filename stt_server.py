@@ -1,88 +1,73 @@
 from faster_whisper import WhisperModel
-from flask import Flask, request, jsonify
+from fastapi import FastAPI, HTTPException, Request
 import io
 import time
-import os
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
-app = Flask(__name__)
+app = FastAPI(title="Mitsu STT Server")
 
 # --- CONFIGURATION ---
-# Ryzen 5 5600 has 6 cores. We use 4 threads per model to leave 
-# 2 cores free for the OS/Go/Brain. This prevents stuttering.
-THREADS = 4 
+THREADS = 6 
 DEVICE = "cpu"
 COMPUTE = "int8"
 
-print(f"🚀 [INIT] Loading Models on {DEVICE} with {THREADS} threads...")
+# Model Registry to avoid branching logic
+MODELS = {
+    "en": WhisperModel("distil-small.en", device=DEVICE, compute_type=COMPUTE, cpu_threads=THREADS),
+    "pt": WhisperModel("small", device=DEVICE, compute_type=COMPUTE, cpu_threads=THREADS)
+}
 
-# 1. LOAD ENGLISH SPECIALIST (The Speed Demon)
-# distil-small.en is ~60% faster than standard small.
-print("   - Loading 'distil-small.en'...")
-model_en = WhisperModel("distil-small.en", device=DEVICE, compute_type=COMPUTE, cpu_threads=THREADS)
+executor = ThreadPoolExecutor(max_workers=2)
+current_mode = "en"
 
-# 2. LOAD PORTUGUESE GENERALIST (The Polyglot)
-# Standard 'small' is best for PT. 
-print("   - Loading 'small' (Portuguese)...")
-model_pt = WhisperModel("small", device=DEVICE, compute_type=COMPUTE, cpu_threads=THREADS)
-
-# Global State
-current_mode = "en" # Start in English
-print("✅ [READY] Aura Ears Online. Default: English")
-
-@app.route('/swap/<lang>', methods=['POST'])
-def swap_language(lang):
+@app.post("/swap/{lang}")
+async def swap_language(lang: str):
     global current_mode
-    if lang in ["en", "pt"]:
-        current_mode = lang
-        print(f"🔄 [HOTSWAP] Language set to: {lang.upper()}")
-        return jsonify({"status": "ok", "mode": lang})
-    return jsonify({"error": "Invalid language. Use 'en' or 'pt'"}), 400
+    if lang not in MODELS:
+        raise HTTPException(status_code=400, detail="Invalid language. Use 'en' or 'pt'")
+    
+    current_mode = lang
+    print(f"🔄 [HOTSWAP] Language set to: {lang.upper()}")
+    return {"status": "ok", "mode": lang}
 
-@app.route('/transcribe', methods=['POST'])
-def transcribe():
-    if 'audio' not in request.files:
-        return jsonify({"text": ""}), 400
-    
-    audio_file = request.files['audio']
-    audio_bytes = audio_file.read()
-    audio_stream = io.BytesIO(audio_bytes)
-    
+def run_transcription(audio_data, mode, initial_prompt=None):
+    model = MODELS.get(mode)
+    if not model:
+        return ""
+
+    audio_stream = io.BytesIO(audio_data)
+    segments, _ = model.transcribe(
+        audio_stream, 
+        beam_size=1, 
+        language=mode, 
+        condition_on_previous_text=False,
+        initial_prompt=initial_prompt,
+        vad_filter=True,
+        vad_parameters=dict(min_silence_duration_ms=500),
+        no_speech_threshold=0.6
+    )
+    return "".join([s.text for s in segments]).strip()
+
+@app.post("/transcribe")
+async def transcribe(request: Request):
+    # Fail Fast: Ensure we have audio data
+    audio_bytes = await request.body()
+    if not audio_bytes:
+        return {"text": "", "error": "No audio data received"}
+
+    initial_prompt = request.headers.get("X-Initial-Prompt")
     start = time.time()
     
-    # 2. HOTSWAP LOGIC
-    # No loading time. Just pointer selection.
-    if current_mode == "en":
-        # English: Beam 1 is enough for Distil model
-        segments, info = model_en.transcribe(
-            audio_stream, 
-            beam_size=1, 
-            language="en", 
-            condition_on_previous_text=False,
-            vad_filter=False # You have Go VAD
-        )
-    else:
-        # Portuguese: We need standard small
-        segments, info = model_pt.transcribe(
-            audio_stream, 
-            beam_size=1, 
-            language="pt",
-            condition_on_previous_text=False,
-            vad_filter=False
-        )
-
-    # 3. Format Output
-    text = "".join([s.text for s in segments]).strip()
-    duration = time.time() - start
+    loop = asyncio.get_running_loop()
+    text = await loop.run_in_executor(executor, run_transcription, audio_bytes, current_mode, initial_prompt)
     
+    duration = time.time() - start
     if text:
         print(f"🎤 [{current_mode.upper()}] Time: {duration:.3f}s | Text: {text}")
     
-    return jsonify({
-        "text": text, 
-        "language": current_mode, 
-        "duration": duration
-    })
+    return {"text": text, "language": current_mode, "duration": duration}
 
 if __name__ == "__main__":
-    # Threaded=True is important for Flask to handle requests while processing
-    app.run(host='0.0.0.0', port=5001, threaded=True)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=5001)

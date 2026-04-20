@@ -2,347 +2,310 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"mitsu/pkg/brain"
 	"mitsu/pkg/common"
 	"mitsu/pkg/ear"
 	"mitsu/pkg/gaming"
+	"mitsu/pkg/mcp"
 	"mitsu/pkg/mouth"
-	"net/http"
+	"mitsu/pkg/ui"
 	"os"
 	"os/signal"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 )
 
-// Helper for timestamped logs
-func tlog(format string, a ...interface{}) {
-	ts := time.Now().Format("15:04:05.000")
-	fmt.Printf("[%s] "+format+"\n", append([]interface{}{ts}, a...)...)
-}
-
-var isMitsuSpeaking atomic.Bool
-var currentLang string
-var earLangChan chan string
-var brainLangChan chan string
-var mouthLangChan chan string
-var clearMemoryChan chan struct{}
-var activeVoiceConfig mouth.VoiceConfig
-var gameController *gaming.GameController
-
 const (
-	KokoroVoiceAmy = "af_heart"
+	DefaultServerPort       = ":8080"
+	DefaultGameBridgeURL    = "localhost:8888"
+	BrainWarmUpDelay        = 3 * time.Second
+	ShutdownGracePeriod     = 1 * time.Second
+	DefaultVoiceConfig      = "voice_config.json"
+	KokoroVoiceAmy          = "af_heart"
+	DataChannelBuffer       = 10
+	ResponseChannelBuffer   = 100
+	UIMessageChannelBuffer  = 100
 )
 
-func main() {
-	langFlag := flag.String("lang", "en", "Language to use (en or pt)")
-	flag.Parse()
-	currentLang = *langFlag
-	earLangChan = make(chan string, 1)
-	brainLangChan = make(chan string, 1)
-	mouthLangChan = make(chan string, 1)
-	clearMemoryChan = make(chan struct{}, 1)
-
-	// Load voice config from Lab
-	loadVoiceConfig()
-
-	tlog("Starting Mitsu in %s mode...", strings.ToUpper(currentLang))
-
-	broker := &Broker{
-		clients:        make(map[chan string]bool),
-		newClients:     make(chan chan string),
-		defunctClients: make(chan chan string),
-		messages:       make(chan string),
-	}
-	go broker.Start()
-
-	speechToBrain := make(common.SpeechText, 10)
-	brainToMouth := make(common.LLMResponse)
-	bargeIn := make(chan struct{}, 1)
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Initialize components
-	gameController = gaming.NewGameController("localhost:8888")
-	go gameController.Start(ctx)
-
-	sttURL := os.Getenv("STT_HOST")
-	if sttURL == "" {
-		sttURL = "http://localhost:5001"
-	}
-	mitsuEar := &ear.Ear{
-		STTURL:             sttURL,
-		CurrentLang:        currentLang,
-		LanguageChangeChan: earLangChan,
-		IsMitsuSpeaking:    &isMitsuSpeaking,
-		SpeechToBrain:      speechToBrain,
-		UiMessages:         broker.messages,
-		InputDevice:        "", // Use default (let qpwgraph handle it)
-		TestInput:          os.Getenv("TEST_INPUT_FILE"),
-	}
-
-	ollamaURL := os.Getenv("OLLAMA_HOST")
-	if ollamaURL == "" {
-		ollamaURL = "http://localhost:11434"
-	}
-	mitsuBrain := &brain.Brain{
-		OllamaURL:          ollamaURL,
-		CurrentLang:        currentLang,
-		LanguageChangeChan: brainLangChan,
-		SpeechToBrain:      speechToBrain,
-		BrainToMouth:       brainToMouth,
-		UiMessages:         broker.messages,
-		ClearMemoryChan:    clearMemoryChan,
-	}
-
-	kokoroURL := os.Getenv("KOKORO_HOST")
-	if kokoroURL == "" {
-		kokoroURL = "http://kokoro:8880"
-	}
-	mitsuMouth := &mouth.Mouth{
-		KokoroURL:          kokoroURL,
-		CurrentLang:        currentLang,
-		LanguageChangeChan: mouthLangChan,
-		ActiveConfig:       activeVoiceConfig,
-		IsMitsuSpeaking:    &isMitsuSpeaking,
-		BrainToMouth:       brainToMouth,
-		BargeIn:            bargeIn,
-		KokoroVoiceAmy:     KokoroVoiceAmy,
-		OutputDevice:       "", // Use default (let qpwgraph handle it)
-		TestOutput:         os.Getenv("TEST_OUTPUT_FILE"),
-	}
-
-	go mitsuEar.Start(ctx)
-	go mitsuBrain.Start()
-	go mitsuMouth.Start(ctx)
-
-	// Background WarmUp check with vocal alert
-	go func() {
-		time.Sleep(3 * time.Second) // Wait for Kokoro/Ollama services to be up
-		
-		err := mitsuBrain.WarmUp(func() {
-			thinkingMsg := "Hmmm, let me think about that."
-			if currentLang == "pt" {
-				thinkingMsg = "Hmmm, deixa eu ver."
-			}
-			tlog("Brain: Models not in GPU, playing alert and loading...")
-			mitsuMouth.Alert(thinkingMsg, currentLang)
-		})
-
-		if err != nil {
-			tlog("Brain WarmUp error: %v", err)
-		} else {
-			tlog("Brain is ready.")
-		}
-	}()
-
-	go startWebServer(speechToBrain, broker)
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	<-sigChan
-
-	tlog("Shutting down...")
-	cancel()
-	time.Sleep(1 * time.Second)
+func logWithTimestamp(format string, args ...interface{}) {
+	timestamp := time.Now().Format("15:04:05.000")
+	fmt.Printf("[%s] "+format+"\n", append([]interface{}{timestamp}, args...)...)
 }
 
-func loadVoiceConfig() {
-	file, err := os.ReadFile("voice_config.json")
-	if err != nil {
-		tlog("Warning: voice_config.json not found, using defaults.")
-		activeVoiceConfig = mouth.VoiceConfig{
-			VoiceModel: "mitsu_custom", LangCode: "p", Pitch: 1.25, Speed: 1.0, FormantPreserved: true,
-			Highpass: 150, Lowpass: 15000, BoxyGain: -15, PresenceGain: 8, SparkleGain: 0,
-			ExciterAmount: 3.0, DeesserIntensity: 0.5, StereoWidth: 2.0, LoudnormI: -16,
-		}
+func main() {
+	languageFlag := flag.String("lang", string(common.LanguageEnglish), "Language to use (en or pt)")
+	flag.Parse()
+
+	applicationContext, cancelApplication := context.WithCancel(context.Background())
+	defer cancelApplication()
+
+	application := NewMitsuApp(common.Language(*languageFlag))
+	application.Initialize(applicationContext)
+	application.Run(applicationContext)
+
+	signalChannel := make(chan os.Signal, 1)
+	signal.Notify(signalChannel, syscall.SIGINT, syscall.SIGTERM)
+	<-signalChannel
+
+	logWithTimestamp("Shutting down...")
+	cancelApplication()
+	application.CloseMCP()
+	time.Sleep(ShutdownGracePeriod)
+}
+
+// MitsuApp is the main application container.
+type MitsuApp struct {
+	State      *AppState
+	Components *AppComponents
+}
+
+// AppState manages the application-level state.
+type AppState struct {
+	Language *common.LanguageState
+	System   *SystemState
+}
+
+// SystemState manages system-level resources.
+type SystemState struct {
+	Bus *AppBus
+	MCP *mcp.Manager
+}
+
+// AppBus manages communication channels.
+type AppBus struct {
+	Data    *DataChannels
+	Control *ControlChannels
+}
+
+// DataChannels holds the main data flow channels.
+type DataChannels struct {
+	SpeechToBrain common.SpeechChannel
+	BrainToMouth  common.LLMChannel
+}
+
+// ControlChannels holds system control channels.
+type ControlChannels struct {
+	UiMessages  chan string
+	ClearMemory chan struct{}
+}
+
+// AppComponents aggregates the various functional components.
+type AppComponents struct {
+	Processing *ProcessingComponents
+	Interface  *InterfaceComponents
+}
+
+// ProcessingComponents aggregates backend processing modules.
+type ProcessingComponents struct {
+	IO    *IOComponents
+	Brain *brain.Brain
+}
+
+// IOComponents aggregates input and output modules.
+type IOComponents struct {
+	Ear   *ear.Ear
+	Mouth *mouth.Mouth
+}
+
+// InterfaceComponents aggregates user interface modules.
+type InterfaceComponents struct {
+	Game *gaming.GameController
+	UI   *ui.UIManager
+}
+
+// NewMitsuApp creates a new MitsuApp instance.
+func NewMitsuApp(initialLanguage common.Language) *MitsuApp {
+	bus := &AppBus{
+		Data: &DataChannels{
+			SpeechToBrain: make(common.SpeechChannel, DataChannelBuffer),
+			BrainToMouth:  make(common.LLMChannel, ResponseChannelBuffer),
+		},
+		Control: &ControlChannels{
+			UiMessages:  make(chan string, UIMessageChannelBuffer),
+			ClearMemory: make(chan struct{}, 1),
+		},
+	}
+
+	return &MitsuApp{
+		State: &AppState{
+			Language: common.NewLanguageState(initialLanguage),
+			System: &SystemState{
+				Bus: bus,
+				MCP: mcp.NewManager(),
+			},
+		},
+		Components: &AppComponents{
+			Processing: &ProcessingComponents{
+				IO: &IOComponents{},
+			},
+			Interface: &InterfaceComponents{},
+		},
+	}
+}
+
+// Initialize sets up the application components.
+func (application *MitsuApp) Initialize(applicationContext context.Context) {
+	logWithTimestamp("Starting Mitsu")
+	logWithTimestamp("Initializing Mitsu in %s mode...", strings.ToUpper(string(application.GetLanguage())))
+
+	mcpManager := application.State.System.MCP
+	mcpError := mcpManager.Start(applicationContext, "python3", "pkg/mcp/pokemon_server.py")
+	if mcpError != nil {
+		logWithTimestamp("Warning: Failed to start MCP Manager: %v", mcpError)
+	}
+
+	gameBridgeAddress := common.Address(DefaultGameBridgeURL)
+	application.Components.Interface.Game = gaming.NewGameController(gameBridgeAddress)
+	
+	application.Components.Interface.UI = ui.NewUIManager(
+		application.State.Language,
+		application.Components.Interface.Game,
+		application.State.System.Bus.Data.SpeechToBrain,
+		application.State.System.Bus.Control.UiMessages,
+	)
+
+	application.initializeProcessing()
+}
+
+func (application *MitsuApp) initializeProcessing() {
+	sttURL := common.URL(getEnv("STT_HOST", "http://localhost:5001"))
+	sttStreamingURL := common.URL(getEnv("STT_STREAMING_HOST", "ws://localhost:5002/ws"))
+	
+	application.Components.Processing.IO.Ear = &ear.Ear{
+		Configuration: &ear.EarConfiguration{
+			Connectivity: &ear.EarConnectivity{
+				SpeechToTextURL:          sttURL,
+				SpeechToTextStreamingURL: sttStreamingURL,
+			},
+			State: &ear.EarState{
+				Language: application.State.Language,
+				Device: &ear.EarDevice{
+					InputName: "",
+					TestInput: os.Getenv("TEST_INPUT_FILE"),
+				},
+			},
+		},
+		Execution: &ear.EarExecution{
+			Pipeline: &ear.EarPipeline{
+				SpeechToBrain: application.State.System.Bus.Data.SpeechToBrain,
+				UiMessages:    application.State.System.Bus.Control.UiMessages,
+			},
+			Streaming: &ear.EarStreaming{
+				WebSocket: &ear.SynchronizedWebSocket{},
+			},
+		},
+	}
+
+	ollamaURL := common.URL(getEnv("OLLAMA_HOST", "http://localhost:11434"))
+	application.Components.Processing.Brain = &brain.Brain{
+		Configuration: &brain.BrainConfiguration{
+			Connectivity: &brain.BrainConnectivity{
+				OllamaURL: ollamaURL,
+				MCP:       application.State.System.MCP,
+			},
+			State: &brain.BrainState{
+				Language: application.State.Language,
+				Memory: &brain.BrainMemory{
+					History:      &brain.ChatHistory{},
+					ClearChannel: application.State.System.Bus.Control.ClearMemory,
+				},
+			},
+		},
+		Execution: &brain.BrainExecution{
+			Data: &brain.BrainData{
+				SpeechToBrain: application.State.System.Bus.Data.SpeechToBrain,
+				BrainToMouth:  application.State.System.Bus.Data.BrainToMouth,
+			},
+			UI: &brain.BrainUI{
+				UiMessages: application.State.System.Bus.Control.UiMessages,
+			},
+		},
+	}
+
+	kokoroURL := common.URL(getEnv("KOKORO_HOST", "http://kokoro:8880"))
+	application.Components.Processing.IO.Mouth = &mouth.Mouth{
+		Configuration: &mouth.MouthConfiguration{
+			Settings: &mouth.MouthSettings{
+				KokoroURL:      kokoroURL,
+				KokoroVoiceAmy: KokoroVoiceAmy,
+				ActiveConfig:   mouth.LoadVoiceConfig(DefaultVoiceConfig),
+			},
+			State: &mouth.MouthState{
+				Language: application.State.Language,
+				Device: &mouth.MouthDevice{
+					OutputName: "",
+					TestOutput: os.Getenv("TEST_OUTPUT_FILE"),
+				},
+			},
+		},
+		Runtime: &mouth.MouthRuntime{
+			Data: &mouth.MouthData{
+				BrainToMouth: application.State.System.Bus.Data.BrainToMouth,
+			},
+			Playback: &mouth.MouthPlayback{},
+		},
+	}
+}
+
+// Run starts all application service routines.
+func (application *MitsuApp) Run(applicationContext context.Context) {
+	go application.Components.Interface.Game.Start(applicationContext)
+	go application.Components.Processing.IO.Ear.Start(applicationContext)
+	go application.Components.Processing.Brain.Start(applicationContext)
+	go application.Components.Processing.IO.Mouth.Start(applicationContext)
+	go application.Components.Interface.UI.StartServer(applicationContext, DefaultServerPort)
+
+	go application.warmUp(applicationContext)
+}
+
+func (application *MitsuApp) warmUp(applicationContext context.Context) {
+	time.Sleep(BrainWarmUpDelay)
+	warmUpError := application.Components.Processing.Brain.WarmUp(applicationContext, application.onBrainLoading)
+	application.logBrainReady(warmUpError)
+}
+
+func (application *MitsuApp) onBrainLoading() {
+	thinkingMessage := application.getThinkingMessage()
+	logWithTimestamp("Brain: Models not in GPU, playing alert and loading...")
+	application.Alert(thinkingMessage, string(application.GetLanguage()))
+}
+
+func (application *MitsuApp) getThinkingMessage() string {
+	if application.GetLanguage() == common.LanguagePortuguese {
+		return "Hmmm, deixa eu ver."
+	}
+	return "Hmmm, let me think about that."
+}
+
+func (application *MitsuApp) logBrainReady(readyError error) {
+	if readyError != nil {
+		logWithTimestamp("Brain WarmUp error: %v", readyError)
 		return
 	}
-	json.Unmarshal(file, &activeVoiceConfig)
-	tlog("Voice configuration loaded from Lab.")
+	logWithTimestamp("Brain is ready.")
 }
 
-func startWebServer(speechToBrain common.SpeechText, b *Broker) {
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Mitsu Tactical Interface</title>
-    <style>
-        body { background: #1a1a1a; color: #00ff00; font-family: monospace; padding: 20px; }
-        #header { display: flex; justify-content: space-between; align-items: center; }
-        #status { padding: 5px 10px; border-radius: 5px; font-weight: bold; }
-        .on { background: #004400; color: #00ff00; }
-        .off { background: #440000; color: #ff0000; }
-        #terminal { background: #000; border: 1px solid #00ff00; height: 500px; padding: 10px; overflow-y: scroll; margin-bottom: 20px; font-size: 14px; }
-        .user { color: #00ff00; }
-        .mic { color: #0088ff; font-style: italic; }
-        .aura { color: #ff00ff; font-weight: bold; }
-        input { background: #000; color: #00ff00; border: 1px solid #00ff00; width: 80%; padding: 12px; }
-        button { background: #00ff00; color: #000; border: none; padding: 12px 24px; cursor: pointer; font-weight: bold; }
-        .game-btn { background: #ffaa00; margin-left: 10px; }
-    </style>
-</head>
-<body>
-    <div id="header">
-        <h1>MITSU COMMAND CENTER</h1>
-        <div id="status" class="off">IDLE</div>
-        <div>
-            <button onclick="hotswap('en')" style="background: #0088ff;">EN</button>
-            <button onclick="hotswap('pt')" style="background: #00cc00;">PT</button>
-        </div>
-        <button onclick="toggleGaming()" class="game-btn" id="gameBtn">GAMER MODE: OFF</button>
-    </div>
-    <div id="terminal"></div>
-    <input type="text" id="userInput" placeholder="Type message..." onkeydown="if(event.key==='Enter') send()">
-    <button onclick="send()">TRANSMIT</button>
-    <script>
-        const t = document.getElementById("terminal");
-        const s = document.getElementById("status");
-        const gb = document.getElementById("gameBtn");
-        function log(msg, className) {
-            const div = document.createElement("div");
-            div.className = className;
-            let prefix = className === "aura" ? "[MITSU] " : "> ";
-            div.textContent = prefix + msg;
-            t.appendChild(div);
-            t.scrollTop = t.scrollHeight;
-        }
-        function hotswap(lang) {
-            fetch("/hotswap?lang=" + lang);
-        }
-        const eventSource = new EventSource("/events");
-        eventSource.onmessage = function(e) {
-            const data = JSON.parse(e.data);
-            if (data.type === "status") {
-                s.textContent = data.text;
-                s.className = (data.text === "SPEAKING..." || data.text === "LISTENING") ? "on" : "off";
-            } else if (data.type === "gaming") {
-                gb.textContent = "GAMER MODE: " + data.status;
-            } else {
-                log(data.text, data.type);
-            }
-        };
-        function send() {
-            const i = document.getElementById("userInput");
-            if (!i.value) return;
-            log(i.value, "user");
-            fetch("/talk?text=" + encodeURIComponent(i.value));
-            i.value = "";
-        }
-        function toggleGaming() {
-            fetch("/gaming/toggle");
-        }
-    </script>
-</body>
-</html>`)
-	})
-
-	http.HandleFunc("/talk", func(w http.ResponseWriter, r *http.Request) {
-		text := r.URL.Query().Get("text")
-		if text != "" {
-			speechToBrain <- common.SpeechEntry{
-				Text:      text,
-				Language:  currentLang, // Use the current hotswapped language
-				Timestamp: time.Now(),
-				Profile:   common.NewProfile(),
-			}
-			fmt.Fprint(w, "OK")
-		}
-	})
-
-	http.HandleFunc("/hotswap", func(w http.ResponseWriter, r *http.Request) {
-		lang := r.URL.Query().Get("lang")
-		if lang == "en" || lang == "pt" {
-			currentLang = lang
-			// Broadcast to all specialized channels
-			select { case earLangChan <- lang: default: }
-			select { case brainLangChan <- lang: default: }
-			select { case mouthLangChan <- lang: default: }
-
-			msg, _ := json.Marshal(map[string]string{"text": "HOTSWAP: Switched to " + lang, "type": "status"})
-			b.messages <- string(msg)
-			fmt.Fprintf(w, "Switched to %s", lang)
-			tlog("Language hotswapped to %s", lang)
-		} else {
-			http.Error(w, "Invalid language", 400)
-		}
-	})
-
-	http.HandleFunc("/gaming/toggle", func(w http.ResponseWriter, r *http.Request) {
-		enabled := gameController.Enabled.Load()
-		gameController.Enabled.Store(!enabled)
-		status := "OFF"
-		if !enabled {
-			status = "ON"
-		}
-		// Notify via broker (hacky but works for now)
-		msg, _ := json.Marshal(map[string]string{"status": status, "type": "gaming"})
-		b.messages <- string(msg)
-		fmt.Fprint(w, "OK")
-	})
-
-	http.HandleFunc("/clear", func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case clearMemoryChan <- struct{}{}:
-			fmt.Fprint(w, "Memory cleared")
-		default:
-			fmt.Fprint(w, "Already clearing")
-		}
-	})
-
-	http.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
-		f, ok := w.(http.Flusher)
-		if !ok {
-			return
-		}
-		messageChan := make(chan string)
-		b.newClients <- messageChan
-		defer func() { b.defunctClients <- messageChan }()
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		for {
-			select {
-			case msg := <-messageChan:
-				fmt.Fprintf(w, "data: %s\n\n", msg)
-				f.Flush()
-			case <-r.Context().Done():
-				return
-			}
-		}
-	})
-	http.ListenAndServe(":8080", nil)
+// GetLanguage returns the current system language.
+func (application *MitsuApp) GetLanguage() common.Language {
+	return application.State.Language.CurrentLanguage()
 }
 
-type Broker struct {
-	clients        map[chan string]bool
-	newClients     chan chan string
-	defunctClients chan chan string
-	messages       chan string
+// CloseMCP shuts down the MCP manager.
+func (application *MitsuApp) CloseMCP() {
+	application.State.System.MCP.Close()
 }
 
-func (b *Broker) Start() {
-	for {
-		select {
-		case s := <-b.newClients:
-			b.clients[s] = true
-		case s := <-b.defunctClients:
-			delete(b.clients, s)
-			close(s)
-		case msg := <-b.messages:
-			for s := range b.clients {
-				select {
-				case s <- msg:
-				default:
-				}
-			}
-		}
+// Alert triggers a voice alert through the mouth component.
+func (application *MitsuApp) Alert(text string, language string) {
+	application.Components.Processing.IO.Mouth.Alert(text, language)
+}
+
+func getEnv(key, fallback string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
 	}
+	return fallback
 }

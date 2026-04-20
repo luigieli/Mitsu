@@ -1,0 +1,16 @@
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    bzip2 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install dependencies
+RUN pip install --no-cache-dir sherpa-onnx fastapi "uvicorn[standard]" numpy
+
+COPY stt_streaming.py .
+
+EXPOSE 5002
+CMD ["python3", "stt_streaming.py"]

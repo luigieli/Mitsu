@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Mitsu Tactical Interface</title>
+    <style>
+        body { background: #1a1a1a; color: #00ff00; font-family: monospace; padding: 20px; }
+        #header { display: flex; justify-content: space-between; align-items: center; }
+        #status { padding: 5px 10px; border-radius: 5px; font-weight: bold; }
+        .on { background: #004400; color: #00ff00; }
+        .off { background: #440000; color: #ff0000; }
+        #terminal { background: #000; border: 1px solid #00ff00; height: 500px; padding: 10px; overflow-y: scroll; margin-bottom: 20px; font-size: 14px; }
+        .user { color: #00ff00; }
+        .mic { color: #0088ff; font-style: italic; }
+        .aura { color: #ff00ff; font-weight: bold; }
+        input { background: #000; color: #00ff00; border: 1px solid #00ff00; width: 80%; padding: 12px; }
+        button { background: #00ff00; color: #000; border: none; padding: 12px 24px; cursor: pointer; font-weight: bold; }
+        .game-btn { background: #ffaa00; margin-left: 10px; }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <h1>MITSU COMMAND CENTER</h1>
+        <div id="status" class="off">IDLE</div>
+        <div>
+            <button onclick="hotswap('en')" style="background: #0088ff;">EN</button>
+            <button onclick="hotswap('pt')" style="background: #00cc00;">PT</button>
+        </div>
+        <button onclick="toggleGaming()" class="game-btn" id="gameBtn">GAMER MODE: OFF</button>
+    </div>
+    <div id="terminal"></div>
+    <input type="text" id="userInput" placeholder="Type message..." onkeydown="if(event.key==='Enter') send()">
+    <button onclick="send()">TRANSMIT</button>
+    <script>
+        const t = document.getElementById("terminal");
+        const s = document.getElementById("status");
+        const gb = document.getElementById("gameBtn");
+        function log(msg, className) {
+            const div = document.createElement("div");
+            div.className = className;
+            let prefix = className === "aura" ? "[MITSU] " : "> ";
+            div.textContent = prefix + msg;
+            t.appendChild(div);
+            t.scrollTop = t.scrollHeight;
+        }
+        function hotswap(lang) {
+            fetch("/hotswap?lang=" + lang);
+        }
+        const eventSource = new EventSource("/events");
+        eventSource.onmessage = function(e) {
+            const data = JSON.parse(e.data);
+            if (data.type === "status") {
+                s.textContent = data.text;
+                s.className = (data.text === "SPEAKING..." || data.text === "LISTENING") ? "on" : "off";
+            } else if (data.type === "gaming") {
+                gb.textContent = "GAMER MODE: " + data.status;
+            } else {
+                log(data.text, data.type);
+            }
+        };
+        function send() {
+            const i = document.getElementById("userInput");
+            if (!i.value) return;
+            log(i.value, "user");
+            fetch("/talk?text=" + encodeURIComponent(i.value));
+            i.value = "";
+        }
+        function toggleGaming() {
+            fetch("/gaming/toggle");
+        }
+    </script>
+</body>
+</html>

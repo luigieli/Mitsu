@@ -43,7 +43,7 @@ clear-memory:
 
 mic-setup:
 	@echo "Checking for denoised mic..."
-	@pactl list sources short | grep -q "denoised_mic" || echo "WARNING: Denoised mic not found. Ensure PipeWire config is loaded."
+	@wpctl status | grep -q "denoised_mic" || echo "WARNING: Denoised mic not found. Ensure PipeWire config is loaded."
 
 clean:
 	@echo "Cleaning up..."

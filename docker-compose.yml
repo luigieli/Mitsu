@@ -4,8 +4,9 @@ services:
     image: ollama/ollama:latest
     volumes:
       - ./ollama_data:/root/.ollama
-    ports:
-      - "11434:11434"
+    # Ports removed for security (Inquiry 2.3)
+    expose:
+      - "11434"
     devices:
       - /dev/dri:/dev/dri
     group_add:
@@ -13,34 +14,64 @@ services:
     environment:
       - OLLAMA_VULKAN=1
       - OLLAMA_KEEP_ALIVE=-1
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # Service 2: The Voice (Kokoro TTS API)
   kokoro:
     image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
-    ports:
-      - "8880:8880"
+    expose:
+      - "8880"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8880/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # Service 3: The Ear (Faster-Whisper STT API)
   stt:
     build:
       context: .
       dockerfile: Dockerfile.stt
-    ports:
-      - "5001:5001"
+    expose:
+      - "5001"
     volumes:
       - ./whisper_cache:/root/.cache/huggingface
     environment:
       - WHISPER_MODEL=small
       - WHISPER_THREADS=4
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/docs"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # POC: Sherpa-ONNX Streaming STT
+  stt-streaming:
+    build:
+      context: .
+      dockerfile: Dockerfile.streaming
+    expose:
+      - "5002"
+    volumes:
+      - ./models:/app/models
+    environment:
+      - MODEL_DIR=/app/models/sherpa-onnx-streaming-zipformer-en-2023-06-26
 
   # Service 4: The Companion (Go CNS)
   companion:
     build:
       context: .
     depends_on:
-      - ollama
-      - kokoro
-      - stt
+      ollama:
+        condition: service_healthy
+      kokoro:
+        condition: service_healthy
+      stt:
+        condition: service_healthy
     ports:
       - "8080:8080"
     devices:
@@ -51,13 +82,14 @@ services:
       - OLLAMA_HOST=http://ollama:11434
       - KOKORO_HOST=http://kokoro:8880
       - STT_HOST=http://stt:5001
+      - STT_STREAMING_HOST=ws://stt-streaming:5002/ws
       - PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native
-      - PULSE_COOKIE=/run/user/1000/pulse/cookie
+      - PULSE_COOKIE=/run/user/${UID:-1000}/pulse/cookie
       - MITSU_LANG=${MITSU_LANG:-en}
       - GGML_VULKAN_DEVICE=0
     volumes:
       - ${XDG_RUNTIME_DIR}/pulse/native:${XDG_RUNTIME_DIR}/pulse/native
-      - ${HOME}/.config/pulse/cookie:/run/user/1000/pulse/cookie
+      - ${HOME}/.config/pulse/cookie:/run/user/${UID:-1000}/pulse/cookie
       - ./voice_config.json:/app/voice_config.json
-    user: "${UID}:${GID}"
+    user: "${UID:-1000}:${GID:-1000}"
     command: ["sh", "-c", "./companion -lang=${MITSU_LANG}"]

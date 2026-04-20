@@ -1,0 +1,19 @@
+[
+  {"id": "get_starter", "name": "Get Starter Pokémon", "description": "Visit Professor Oak's lab and choose your first Pokémon.", "status": "PENDING"},
+  {"id": "oaks_parcel", "name": "Deliver Oak's Parcel", "description": "Get the parcel from Viridian City Mart and bring it back to Oak.", "status": "PENDING"},
+  {"id": "get_pokedex", "name": "Get Pokedex", "description": "Receive the Pokedex and Pokeballs from Professor Oak.", "status": "PENDING"},
+  {"id": "badge_1", "name": "Boulder Badge", "description": "Defeat Brock in Pewter City Gym.", "status": "PENDING"},
+  {"id": "mt_moon", "name": "Cross Mt. Moon", "description": "Navigate through Mt. Moon to reach Cerulean City.", "status": "PENDING"},
+  {"id": "badge_2", "name": "Cascade Badge", "description": "Defeat Misty in Cerulean City Gym.", "status": "PENDING"},
+  {"id": "ss_anne", "name": "Get HM01 Cut", "description": "Visit the Captain on the S.S. Anne in Vermilion City.", "status": "PENDING"},
+  {"id": "badge_3", "name": "Thunder Badge", "description": "Defeat Lt. Surge in Vermilion City Gym.", "status": "PENDING"},
+  {"id": "rock_tunnel", "name": "Cross Rock Tunnel", "description": "Navigate through Rock Tunnel to reach Lavender Town.", "status": "PENDING"},
+  {"id": "badge_4", "name": "Rainbow Badge", "description": "Defeat Erika in Celadon City Gym.", "status": "PENDING"},
+  {"id": "silph_co", "name": "Clear Silph Co.", "description": "Defeat Team Rocket and Giovanni in Saffron City.", "status": "PENDING"},
+  {"id": "badge_5", "name": "Soul Badge", "description": "Defeat Koga in Fuchsia City Gym.", "status": "PENDING"},
+  {"id": "badge_6", "name": "Marsh Badge", "description": "Defeat Sabrina in Saffron City Gym.", "status": "PENDING"},
+  {"id": "badge_7", "name": "Volcano Badge", "description": "Defeat Blaine in Cinnabar Island Gym.", "status": "PENDING"},
+  {"id": "badge_8", "name": "Earth Badge", "description": "Defeat Giovanni in Viridian City Gym.", "status": "PENDING"},
+  {"id": "victory_road", "name": "Victory Road", "description": "Navigate Victory Road to reach the Indigo Plateau.", "status": "PENDING"},
+  {"id": "elite_four", "name": "Elite Four", "description": "Defeat the Elite Four and the Champion.", "status": "PENDING"}
+]
