@@ -62,12 +62,10 @@ dev: mic-setup
 	mise x -- air
 
 setup-model:
-	@echo "Creating Mitsu personas in Ollama..."
+	@echo "Creating Mitsu persona in Ollama..."
 	docker-compose exec -T ollama ollama pull gemma4:e2b || true
-	docker-compose cp Modelfile.en ollama:/Modelfile.en
-	docker-compose cp Modelfile.pt ollama:/Modelfile.pt
-	docker-compose exec -T ollama ollama create mitsu-en -f /Modelfile.en
-	docker-compose exec -T ollama ollama create mitsu-pt -f /Modelfile.pt
+	docker-compose cp Modelfile ollama:/Modelfile
+	docker-compose exec -T ollama ollama create mitsu -f /Modelfile
 
 monitor:
 	@echo "Manual routing required via qpwgraph. Connect Mitsu_Mouth to your playback device."

@@ -15,8 +15,7 @@ import (
 )
 
 const (
-	ModelEnglish           = "mitsu-en"
-	ModelPortuguese        = "mitsu-pt"
+	ModelName              = "mitsu"
 	ContextExpiration      = 5 * time.Second
 	HistoryLimit           = 10
 	RoleUser               = "user"
@@ -191,9 +190,9 @@ func (brain *Brain) WarmUp(applicationContext context.Context, onLoading func())
 
 	brain.checkMCPStatus(applicationContext)
 
-	modelsToLoad := []string{ModelEnglish, ModelPortuguese}
+	modelsToLoad := []string{ModelName}
 	if !brain.isAnyModelMissing(applicationContext, modelsToLoad) {
-		fmt.Println("Brain: All models already resident in GPU.")
+		fmt.Println("Brain: Model already resident in GPU.")
 		return nil
 	}
 
@@ -388,10 +387,7 @@ func (brain *Brain) buildActiveMessages(entry common.SpeechEntry) []ChatMessage 
 }
 
 func (brain *Brain) selectModel(entry common.SpeechEntry) string {
-	if entry.Details.Language == common.LanguagePortuguese {
-		return ModelPortuguese
-	}
-	return ModelEnglish
+	return ModelName
 }
 
 func (brain *Brain) updateHistory(message ChatMessage) {

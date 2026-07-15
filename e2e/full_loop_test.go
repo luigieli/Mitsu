@@ -34,8 +34,8 @@ func TestMitsuFullLoopE2E(t *testing.T) {
 			ExposedPorts: []string{"11434/tcp"},
 			Files: []testcontainers.ContainerFile{
 				{
-					HostFilePath:      filepath.Join(cwd, "..", "Modelfile.en"),
-					ContainerFilePath: "/Modelfile.en",
+					HostFilePath:      filepath.Join(cwd, "..", "Modelfile"),
+					ContainerFilePath: "/Modelfile",
 					FileMode:          0644,
 				},
 			},
@@ -53,7 +53,7 @@ func TestMitsuFullLoopE2E(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to pull model: %v", err)
 	}
-	_, _, err = ollamaC.Exec(ctx, []string{"ollama", "create", "mitsu-en", "-f", "/Modelfile.en"})
+	_, _, err = ollamaC.Exec(ctx, []string{"ollama", "create", "mitsu", "-f", "/Modelfile"})
 	if err != nil {
 		t.Fatalf("Failed to create persona: %v", err)
 	}
