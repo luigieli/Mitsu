@@ -15,7 +15,7 @@ services:
       - OLLAMA_VULKAN=1
       - OLLAMA_KEEP_ALIVE=-1
       - OLLAMA_FLASH_ATTENTION=1
-      - OLLAMA_KV_CACHE_TYPE=tbq3
+      - OLLAMA_KV_CACHE_TYPE=q4_0
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 10s
