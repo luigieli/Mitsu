@@ -373,9 +373,9 @@ func (brain *Brain) buildActiveMessages(entry common.SpeechEntry) []ChatMessage 
 
 	if len(entry.Details.Audio) > 0 {
 		base64Audio := base64.StdEncoding.EncodeToString(entry.Details.Audio)
-		prompt := "Listen and respond directly to this speech as Mitsu."
+		prompt := "Listen and respond directly to this speech as Mitsu. You MUST format your response exactly as: <user_speech>[exactly transcribe what the user said]</user_speech><response>[your sarcastic response here]</response>"
 		if entry.Details.Language == common.LanguagePortuguese {
-			prompt = "Escute e responda diretamente a esta fala como Mitsu."
+			prompt = "Escute e responda diretamente a esta fala como Mitsu. Você DEVE formatar sua resposta exatamente como: <user_speech>[transcreva exatamente o que ouviu o usuário falar]</user_speech><response>[sua resposta sarcástica aqui]</response>"
 		}
 		messages[len(messages)-1] = ChatMessage{
 			Role:    RoleUser,
@@ -404,7 +404,8 @@ func (brain *Brain) streamResponse(response *http.Response, entry common.SpeechE
 		return
 	}
 
-	tokens := brain.consumeOllamaStream(response, entry, brainStart)
+	rawTokens := brain.consumeOllamaStream(response, entry, brainStart)
+	tokens := brain.parseStream(rawTokens, entry)
 	aggregator := &sentenceAggregator{
 		onSentence: func(sentence string) { brain.dispatchSentence(sentence, entry, false) },
 	}
@@ -422,7 +423,7 @@ func (brain *Brain) streamResponse(response *http.Response, entry common.SpeechE
 }
 
 func (brain *Brain) finalizeResponse(fullResponse string) {
-	responseText := strings.TrimSpace(fullResponse)
+	responseText := strings.TrimSpace(brain.extractResponseText(fullResponse))
 	fmt.Printf("Mitsu: \"%s\"\n", responseText)
 	brain.updateHistory(ChatMessage{Role: RoleAssistant, Content: responseText})
 	brain.notifyUI(responseText, UIMessageTypeAura)
@@ -496,6 +497,7 @@ func (brain *Brain) consumeOllamaStream(response *http.Response, entry common.Sp
 
 func (brain *Brain) dispatchSentence(text string, entry common.SpeechEntry, done bool) {
 	text = strings.TrimSpace(text)
+	text = strings.ReplaceAll(text, "</response>", "")
 	if text == "" && !done { return }
 	
 	brain.Execution.Data.BrainToMouth <- common.LLMEntry{
@@ -515,5 +517,95 @@ func (brain *Brain) notifyUI(text, messageType string) {
 	select {
 	case brain.Execution.UI.UiMessages <- string(message):
 	default:
+	}
+}
+
+func (brain *Brain) extractResponseText(fullOutput string) string {
+	startIndex := strings.Index(fullOutput, "<response>")
+	if startIndex < 0 {
+		return fullOutput
+	}
+	endIndex := strings.Index(fullOutput, "</response>")
+	if endIndex > startIndex {
+		return fullOutput[startIndex+len("<response>"):endIndex]
+	}
+	return fullOutput[startIndex+len("<response>"):]
+}
+
+func (brain *Brain) parseStream(tokens <-chan string, entry common.SpeechEntry) <-chan string {
+	parsedChannel := make(chan string)
+
+	go func() {
+		defer close(parsedChannel)
+		var totalOutput strings.Builder
+		inUserSpeech := false
+		inResponse := false
+		var userSpeech strings.Builder
+		tokenCount := 0
+		fallbackMode := false
+
+		for token := range tokens {
+			tokenCount++
+			if !fallbackMode && !inUserSpeech && !inResponse && tokenCount > 15 {
+				fallbackMode = true
+				parsedChannel <- totalOutput.String()
+			}
+
+			if fallbackMode {
+				parsedChannel <- token
+				continue
+			}
+
+			totalOutput.WriteString(token)
+			currentText := totalOutput.String()
+
+			if strings.Contains(currentText, "<user_speech>") && !inUserSpeech && !inResponse {
+				inUserSpeech = true
+			}
+			if strings.Contains(currentText, "</user_speech>") && inUserSpeech {
+				inUserSpeech = false
+				startIndex := strings.Index(currentText, "<user_speech>") + len("<user_speech>")
+				endIndex := strings.Index(currentText, "</user_speech>")
+				if startIndex >= 0 && endIndex > startIndex {
+					userSpeechText := currentText[startIndex:endIndex]
+					userSpeech.Reset()
+					userSpeech.WriteString(userSpeechText)
+					brain.updateLastUserMessage(userSpeechText)
+				}
+			}
+			if strings.Contains(currentText, "<response>") && !inResponse {
+				inResponse = true
+				responseTagIndex := strings.Index(currentText, "<response>")
+				textAfterTag := currentText[responseTagIndex+len("<response>"):]
+				if textAfterTag != "" {
+					parsedChannel <- textAfterTag
+				}
+				continue
+			}
+			if inResponse {
+				if strings.Contains(token, "</response>") {
+					cleanToken := strings.ReplaceAll(token, "</response>", "")
+					parsedChannel <- cleanToken
+					inResponse = false
+					continue
+				}
+				parsedChannel <- token
+			}
+		}
+	}()
+	return parsedChannel
+}
+
+func (brain *Brain) updateLastUserMessage(actualText string) {
+	history := brain.Configuration.State.Memory.History
+	if len(history.Messages) == 0 {
+		return
+	}
+	for index := len(history.Messages) - 1; index >= 0; index-- {
+		if history.Messages[index].Role == RoleUser {
+			history.Messages[index].Content = actualText
+			fmt.Printf("Brain Memory Updated: replaced placeholder with actual speech: \"%s\"\n", actualText)
+			return
+		}
 	}
 }
