@@ -1,4 +1,4 @@
-package mouth
+package v0_1
 
 import (
 	"context"
@@ -13,8 +13,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/abadojack/whatlanggo"
 )
 
 // VoiceConfig defines the parameters for voice synthesis and audio filtering.
@@ -241,14 +239,12 @@ func (mouth *Mouth) processEntry(applicationContext context.Context, entry commo
 	mouth.Configuration.State.Language.CoordinateSpeaking(true)
 	defer mouth.finalizeEntry(entry)
 
-	ttsStart := time.Now()
 	audioData, fetchError := mouth.fetchAudioFromKokoro(applicationContext, entry)
 	if fetchError != nil {
 		fmt.Printf("Kokoro Error: %v\n", fetchError)
 		return
 	}
 	defer audioData.Close()
-	entry.Context.Profile.AddSpan("TTS_Synthesis", time.Since(ttsStart))
 
 	mouth.playAudio(applicationContext, audioData, entry.Context.Profile, pipeWriter)
 }
@@ -261,11 +257,10 @@ func (mouth *Mouth) finalizeEntry(entry common.LLMEntry) {
 }
 
 func (mouth *Mouth) fetchAudioFromKokoro(applicationContext context.Context, entry common.LLMEntry) (io.ReadCloser, error) {
-	fallbackLanguage := entry.Chunk.Details.InputLanguage
-	if fallbackLanguage == "" {
-		fallbackLanguage = mouth.getCurrentLanguage()
+	language := entry.Chunk.Details.InputLanguage
+	if language == "" {
+		language = mouth.getCurrentLanguage()
 	}
-	language := mouth.detectLanguage(string(entry.Chunk.Details.Text), fallbackLanguage)
 
 	voice := KokoroVoiceEnglish
 	langCode := KokoroLangCodeEnglish
@@ -297,21 +292,6 @@ func (mouth *Mouth) fetchAudioFromKokoro(applicationContext context.Context, ent
 
 	return response.Body, nil
 }
-
-func (mouth *Mouth) detectLanguage(text string, fallback common.Language) common.Language {
-	if len(strings.TrimSpace(text)) < 8 {
-		return fallback
-	}
-	info := whatlanggo.Detect(text)
-	if info.Lang == whatlanggo.Por {
-		return common.LanguagePortuguese
-	}
-	if info.Lang == whatlanggo.Eng {
-		return common.LanguageEnglish
-	}
-	return fallback
-}
-
 
 func (mouth *Mouth) getCurrentLanguage() common.Language {
 	currentLanguage := mouth.Runtime.Playback.CurrentLanguage.Load()

@@ -115,10 +115,11 @@ type EntryContext struct {
 	Profile   *Profile
 }
 
-// SpeechDetails contains the core data of a speech transcription.
+// SpeechDetails contains the core data of a speech transcription or the raw audio data for multimodal processing.
 type SpeechDetails struct {
 	Text     Transcription
 	Language Language
+	Audio    []byte
 }
 
 // LLMEntry is a container for language model output and its context.

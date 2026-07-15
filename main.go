@@ -169,17 +169,9 @@ func (application *MitsuApp) Initialize(applicationContext context.Context) {
 
 	application.initializeProcessing()
 }
-
 func (application *MitsuApp) initializeProcessing() {
-	sttURL := common.URL(getEnv("STT_HOST", "http://localhost:5001"))
-	sttStreamingURL := common.URL(getEnv("STT_STREAMING_HOST", "ws://localhost:5002/ws"))
-	
 	application.Components.Processing.IO.Ear = &ear.Ear{
 		Configuration: &ear.EarConfiguration{
-			Connectivity: &ear.EarConnectivity{
-				SpeechToTextURL:          sttURL,
-				SpeechToTextStreamingURL: sttStreamingURL,
-			},
 			State: &ear.EarState{
 				Language: application.State.Language,
 				Device: &ear.EarDevice{
@@ -195,9 +187,6 @@ func (application *MitsuApp) initializeProcessing() {
 					UiMessages:    application.State.System.Bus.Control.UiMessages,
 				},
 				Status: &ear.PipelineStatus{},
-			},
-			Streaming: &ear.EarStreaming{
-				WebSocket: &ear.SynchronizedWebSocket{},
 			},
 		},
 	}

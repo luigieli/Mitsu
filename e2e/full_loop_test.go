@@ -49,7 +49,7 @@ func TestMitsuFullLoopE2E(t *testing.T) {
 	defer ollamaC.Terminate(ctx)
 
 	fmt.Println("E2E: Creating Mitsu persona in Ollama...")
-	_, _, err = ollamaC.Exec(ctx, []string{"ollama", "pull", "llama3.2:3b"})
+	_, _, err = ollamaC.Exec(ctx, []string{"ollama", "pull", "gemma4:e2b"})
 	if err != nil {
 		t.Fatalf("Failed to pull model: %v", err)
 	}

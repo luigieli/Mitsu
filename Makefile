@@ -57,13 +57,13 @@ run: mic-setup build up setup-model
 
 dev: mic-setup
 	@echo "Starting backend services..."
-	docker-compose up -d ollama kokoro stt
+	docker-compose up -d ollama kokoro
 	@echo "Running Mitsu locally with Hot-Reload (air)..."
 	mise x -- air
 
 setup-model:
 	@echo "Creating Mitsu personas in Ollama..."
-	docker-compose exec -T ollama ollama pull qwen2.5:3b || true
+	docker-compose exec -T ollama ollama pull gemma4:e2b || true
 	docker-compose cp Modelfile.en ollama:/Modelfile.en
 	docker-compose cp Modelfile.pt ollama:/Modelfile.pt
 	docker-compose exec -T ollama ollama create mitsu-en -f /Modelfile.en

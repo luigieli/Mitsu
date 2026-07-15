@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"mitsu/pkg/common"
@@ -83,8 +84,9 @@ type BrainUI struct {
 }
 
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role   string   `json:"role"`
+	Content string   `json:"content"`
+	Images  []string `json:"images,omitempty"`
 }
 
 type OllamaChatRequest struct {
@@ -311,22 +313,43 @@ func (brain *Brain) clearHistory() {
 
 func (brain *Brain) processSpeechEntry(applicationContext context.Context, entry common.SpeechEntry) {
 	if time.Since(entry.Context.Timestamp) > ContextExpiration {
-		fmt.Printf("Brain: Skipping expired context (%s)\n", entry.Details.Text)
+		fmt.Println("Brain: Skipping expired context")
 		return
 	}
 	brain.processRequest(applicationContext, entry)
 }
 
-func (brain *Brain) processRequest(applicationContext context.Context, entry common.SpeechEntry) {
+func (brain *Brain) logProcessing(entry common.SpeechEntry) {
+	if len(entry.Details.Audio) > 0 {
+		fmt.Println("Brain processing direct audio input")
+		return
+	}
 	fmt.Printf("Brain processing: \"%s\"\n", entry.Details.Text)
+}
+
+func (brain *Brain) processRequest(applicationContext context.Context, entry common.SpeechEntry) {
+	brain.logProcessing(entry)
 	brain.notifyUI(ThinkingStatusMessage, UIMessageTypeStatus)
 
-	brain.updateHistory(ChatMessage{Role: RoleUser, Content: string(entry.Details.Text)})
+	userMsg := ChatMessage{
+		Role:    RoleUser,
+		Content: string(entry.Details.Text),
+	}
+	if len(entry.Details.Audio) > 0 {
+		userMsg = ChatMessage{
+			Role:    RoleUser,
+			Content: "🎤 [Voice Input]",
+		}
+	}
+	
+	brain.updateHistory(userMsg)
+
+	messages := brain.buildActiveMessages(entry)
 
 	modelName := brain.selectModel(entry)
 	requestBody, _ := json.Marshal(OllamaChatRequest{
 		Model:    modelName,
-		Messages: brain.Configuration.State.Memory.History.Messages,
+		Messages: messages,
 		Stream:   true,
 	})
 
@@ -343,6 +366,25 @@ func (brain *Brain) processRequest(applicationContext context.Context, entry com
 	defer response.Body.Close()
 
 	brain.streamResponse(response, entry, brainStart)
+}
+
+func (brain *Brain) buildActiveMessages(entry common.SpeechEntry) []ChatMessage {
+	messages := make([]ChatMessage, len(brain.Configuration.State.Memory.History.Messages))
+	copy(messages, brain.Configuration.State.Memory.History.Messages)
+
+	if len(entry.Details.Audio) > 0 {
+		base64Audio := base64.StdEncoding.EncodeToString(entry.Details.Audio)
+		prompt := "Listen and respond directly to this speech as Mitsu."
+		if entry.Details.Language == common.LanguagePortuguese {
+			prompt = "Escute e responda diretamente a esta fala como Mitsu."
+		}
+		messages[len(messages)-1] = ChatMessage{
+			Role:    RoleUser,
+			Content: prompt,
+			Images:  []string{base64Audio},
+		}
+	}
+	return messages
 }
 
 func (brain *Brain) selectModel(entry common.SpeechEntry) string {

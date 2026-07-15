@@ -6,15 +6,14 @@ Mitsu is an interactive AI assistant inspired by [Neuro-Sama](https://www.youtub
 
 Mitsu is built as a modular Go-based "Central Nervous System" (CNS) that orchestrates several specialized microservices:
 
-*   **Ear (`pkg/ear`)**: Handles real-time audio capture from PulseAudio. It uses `webrtcvad` for speech detection and sends audio chunks to the STT server.
-*   **Brain (`pkg/brain`)**: The reasoning engine. It communicates with **Ollama** to generate responses. It features sentence-based streaming to allow the "Mouth" to start speaking before the LLM has finished its entire thought.
+*   **Ear (`pkg/ear`)**: Handles real-time audio capture from PulseAudio. It uses `webrtcvad` for speech detection and sends raw audio directly to the brain for multimodal processing.
+*   **Brain (`pkg/brain`)**: The reasoning engine. It communicates with **Ollama** using multimodal audio models (e.g. Gemma 4) to directly reason about and reply to audio inputs. It features sentence-based streaming to allow the "Mouth" to start speaking before the LLM has finished its entire thought.
 *   **Mouth (`pkg/mouth`)**: Converts text to speech using the **Kokoro TTS** engine. It implements a parallel streaming pipeline where audio is filtered through FFmpeg and piped directly to PulseAudio for playback.
 
 ## 🛠️ Tech Stack
 
-*   **Language**: Go 1.24 (Backend), Python (STT Server)
-*   **LLM**: [Ollama](https://ollama.com/)
-*   **STT**: [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper)
+*   **Language**: Go 1.24 (Backend)
+*   **LLM**: [Ollama](https://ollama.com/) (using Multimodal Gemma 4 models)
 *   **TTS**: [Kokoro](https://github.com/hexgrad/kokoro)
 *   **Audio**: PulseAudio, FFmpeg, WebRTC VAD
 *   **Containerization**: Docker Compose

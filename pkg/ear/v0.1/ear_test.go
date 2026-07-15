@@ -14,6 +14,9 @@ func TestEar_Start_Persistence(t *testing.T) {
 
 	earComponent := &Ear{
 		Configuration: &EarConfiguration{
+			Connectivity: &EarConnectivity{
+				SpeechToTextURL: "http://localhost:5001",
+			},
 			State: &EarState{
 				Language: languageState,
 				Device: &EarDevice{
@@ -29,13 +32,18 @@ func TestEar_Start_Persistence(t *testing.T) {
 				},
 				Status: &PipelineStatus{},
 			},
+			Streaming: &EarStreaming{
+				WebSocket: &SynchronizedWebSocket{},
+			},
 		},
 	}
 
 	applicationContext, cancelApplication := context.WithCancel(context.Background())
 	defer cancelApplication()
 
+	// This is a smoke test to ensure Start doesn't crash
 	go earComponent.Start(applicationContext)
 
 	time.Sleep(100 * time.Millisecond)
+	// Success if it didn't panic
 }
