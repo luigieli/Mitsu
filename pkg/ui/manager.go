@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mitsu/pkg/common"
 	"mitsu/pkg/gaming"
 	"net/http"
@@ -82,6 +83,25 @@ func (uiManager *UIManager) handleIndex(responseWriter http.ResponseWriter, requ
 }
 
 func (uiManager *UIManager) handleTalk(responseWriter http.ResponseWriter, request *http.Request) {
+	if request.Method == http.MethodPost {
+		audioBytes, err := io.ReadAll(request.Body)
+		if err == nil && len(audioBytes) > 0 {
+			uiManager.SpeechToBrain <- common.SpeechEntry{
+				Details: common.SpeechDetails{
+					Text:     "",
+					Language: uiManager.Language.CurrentLanguage(),
+					Audio:    audioBytes,
+				},
+				Context: common.EntryContext{
+					Timestamp: time.Now(),
+					Profile:   common.NewProfile(),
+				},
+			}
+			fmt.Fprint(responseWriter, "AUDIO_OK")
+			return
+		}
+	}
+
 	text := request.URL.Query().Get("text")
 	if text != "" {
 		uiManager.SpeechToBrain <- common.SpeechEntry{

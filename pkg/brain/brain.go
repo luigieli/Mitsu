@@ -353,7 +353,6 @@ func (brain *Brain) processRequest(applicationContext context.Context, entry com
 	requestBody, _ := json.Marshal(OllamaChatRequest{
 		Model:    modelName,
 		Messages: messages,
-		Format:   "json",
 		Stream:   true,
 	})
 
@@ -413,7 +412,6 @@ func (brain *Brain) streamResponse(response *http.Response, entry common.SpeechE
 
 	sequenceID := 0
 	rawTokens := brain.consumeOllamaStream(response, entry, brainStart)
-	tokens := brain.parseStream(rawTokens, entry)
 	aggregator := &sentenceAggregator{
 		onSentence: func(sentence string) {
 			brain.dispatchSentence(sentence, entry, false, sequenceID)
@@ -422,7 +420,7 @@ func (brain *Brain) streamResponse(response *http.Response, entry common.SpeechE
 	}
 
 	var fullResponse strings.Builder
-	for token := range tokens {
+	for token := range rawTokens {
 		fullResponse.WriteString(token)
 		aggregator.Add(token)
 	}
@@ -434,7 +432,7 @@ func (brain *Brain) streamResponse(response *http.Response, entry common.SpeechE
 }
 
 func (brain *Brain) finalizeResponse(fullResponse string) {
-	responseText := strings.TrimSpace(brain.extractResponseText(fullResponse))
+	responseText := strings.TrimSpace(fullResponse)
 	fmt.Printf("Mitsu: \"%s\"\n", responseText)
 	brain.updateHistory(ChatMessage{Role: RoleAssistant, Content: responseText})
 	brain.notifyUI(responseText, UIMessageTypeAura)
@@ -532,164 +530,4 @@ func (brain *Brain) notifyUI(text, messageType string) {
 	}
 }
 
-func (brain *Brain) extractResponseText(fullOutput string) string {
-	var responseMap map[string]interface{}
-	if err := json.Unmarshal([]byte(fullOutput), &responseMap); err == nil {
-		if resp, ok := responseMap["response"].(string); ok {
-			return resp
-		}
-	}
 
-	responseKey := "\"response\""
-	responseIndex := strings.Index(fullOutput, responseKey)
-	if responseIndex < 0 {
-		return fullOutput
-	}
-	remainder := fullOutput[responseIndex+len(responseKey):]
-	firstQuote := strings.Index(remainder, "\"")
-	if firstQuote >= 0 {
-		valPart := remainder[firstQuote+1:]
-		secondQuote := findNonEscapedQuote(valPart)
-		if secondQuote >= 0 {
-			return valPart[:secondQuote]
-		}
-		return valPart
-	}
-	return fullOutput
-}
-
-func (brain *Brain) parseStream(tokens <-chan string, entry common.SpeechEntry) <-chan string {
-	parsedChannel := make(chan string)
-
-	go func() {
-		defer close(parsedChannel)
-		var accumulated strings.Builder
-		state := 0 // 0: before user_speech, 1: in user_speech, 2: before response, 3: in response, 4: done
-		var userSpeech strings.Builder
-
-		for token := range tokens {
-			accumulated.WriteString(token)
-			currentText := accumulated.String()
-
-			switch state {
-			case 0:
-				userSpeechIndex := strings.Index(currentText, "\"user_speech\"")
-				if userSpeechIndex >= 0 {
-					remainder := currentText[userSpeechIndex+len("\"user_speech\""):]
-					firstQuote := strings.Index(remainder, "\"")
-					if firstQuote >= 0 {
-						state = 1
-						accumulated.Reset()
-						tokenRemainder := remainder[firstQuote+1:]
-						closingIndex := findNonEscapedQuote(tokenRemainder)
-						if closingIndex >= 0 {
-							userSpeechText := tokenRemainder[:closingIndex]
-							userSpeech.WriteString(userSpeechText)
-							brain.updateLastUserMessage(userSpeech.String())
-							state = 2
-							accumulated.WriteString(tokenRemainder[closingIndex+1:])
-							continue
-						}
-						userSpeech.WriteString(tokenRemainder)
-					}
-				}
-			case 1:
-				closingQuoteIndex := findNonEscapedQuote(token)
-				if closingQuoteIndex >= 0 {
-					lastPart := token[:closingQuoteIndex]
-					userSpeech.WriteString(lastPart)
-					brain.updateLastUserMessage(userSpeech.String())
-					state = 2
-					accumulated.Reset()
-					accumulated.WriteString(token[closingQuoteIndex+1:])
-					continue
-				}
-				userSpeech.WriteString(token)
-			case 2:
-				responseIndex := strings.Index(currentText, "\"response\"")
-				if responseIndex >= 0 {
-					remainder := currentText[responseIndex+len("\"response\""):]
-					firstQuote := strings.Index(remainder, "\"")
-					if firstQuote >= 0 {
-						state = 3
-						accumulated.Reset()
-						tokenRemainder := remainder[firstQuote+1:]
-						closingIndex := findNonEscapedQuote(tokenRemainder)
-						if closingIndex >= 0 {
-							lastPart := tokenRemainder[:closingIndex]
-							cleanText := brain.cleanTrailingJson(lastPart)
-							if cleanText != "" {
-								parsedChannel <- cleanText
-							}
-							state = 4
-							continue
-						}
-						cleanText := brain.cleanTrailingJson(tokenRemainder)
-						if cleanText != "" {
-							parsedChannel <- cleanText
-						}
-					}
-				}
-			case 3:
-				closingQuoteIndex := findNonEscapedQuote(token)
-				if closingQuoteIndex >= 0 {
-					lastPart := token[:closingQuoteIndex]
-					cleanText := brain.cleanTrailingJson(lastPart)
-					if cleanText != "" {
-						parsedChannel <- cleanText
-					}
-					state = 4
-					accumulated.Reset()
-					continue
-				}
-				cleanText := brain.cleanTrailingJson(token)
-				if cleanText != "" {
-					parsedChannel <- cleanText
-				}
-			}
-		}
-	}()
-	return parsedChannel
-}
-
-func findNonEscapedQuote(s string) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == '"' {
-			if !isEscaped(s, i) {
-				return i
-			}
-		}
-	}
-	return -1
-}
-
-func isEscaped(s string, index int) bool {
-	escaped := false
-	for j := index - 1; j >= 0 && s[j] == '\\'; j-- {
-		escaped = !escaped
-	}
-	return escaped
-}
-
-func (brain *Brain) cleanTrailingJson(text string) string {
-	text = strings.ReplaceAll(text, "\\\"", "\"")
-	text = strings.ReplaceAll(text, "\\n", "\n")
-	text = strings.ReplaceAll(text, "\\t", "\t")
-	text = strings.ReplaceAll(text, "\"", "")
-	text = strings.ReplaceAll(text, "}", "")
-	return text
-}
-
-func (brain *Brain) updateLastUserMessage(actualText string) {
-	history := brain.Configuration.State.Memory.History
-	if len(history.Messages) == 0 {
-		return
-	}
-	for index := len(history.Messages) - 1; index >= 0; index-- {
-		if history.Messages[index].Role == RoleUser {
-			history.Messages[index].Content = actualText
-			fmt.Printf("Brain Memory Updated: replaced placeholder with actual speech: \"%s\"\n", actualText)
-			return
-		}
-	}
-}
