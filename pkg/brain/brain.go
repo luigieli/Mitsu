@@ -411,10 +411,14 @@ func (brain *Brain) streamResponse(response *http.Response, entry common.SpeechE
 		return
 	}
 
+	sequenceID := 0
 	rawTokens := brain.consumeOllamaStream(response, entry, brainStart)
 	tokens := brain.parseStream(rawTokens, entry)
 	aggregator := &sentenceAggregator{
-		onSentence: func(sentence string) { brain.dispatchSentence(sentence, entry, false) },
+		onSentence: func(sentence string) {
+			brain.dispatchSentence(sentence, entry, false, sequenceID)
+			sequenceID++
+		},
 	}
 
 	var fullResponse strings.Builder
@@ -424,7 +428,7 @@ func (brain *Brain) streamResponse(response *http.Response, entry common.SpeechE
 	}
 
 	finalText := aggregator.FlushRemaining()
-	brain.dispatchSentence(finalText, entry, true)
+	brain.dispatchSentence(finalText, entry, true, sequenceID)
 
 	brain.finalizeResponse(fullResponse.String())
 }
@@ -502,7 +506,7 @@ func (brain *Brain) consumeOllamaStream(response *http.Response, entry common.Sp
 	return tokenChannel
 }
 
-func (brain *Brain) dispatchSentence(text string, entry common.SpeechEntry, done bool) {
+func (brain *Brain) dispatchSentence(text string, entry common.SpeechEntry, done bool, sequenceID int) {
 	text = strings.TrimSpace(text)
 	text = strings.ReplaceAll(text, "</response>", "")
 	if text == "" && !done { return }
@@ -512,6 +516,7 @@ func (brain *Brain) dispatchSentence(text string, entry common.SpeechEntry, done
 			Details: common.LLMDetails{
 				Text:          common.LLMResponseContent(text),
 				InputLanguage: entry.Details.Language,
+				SequenceID:    sequenceID,
 			},
 			Done: done,
 		},

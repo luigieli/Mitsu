@@ -138,6 +138,7 @@ type LLMChunk struct {
 type LLMDetails struct {
 	Text          LLMResponseContent
 	InputLanguage Language
+	SequenceID    int
 }
 
 // SpeechChannel is a channel for passing SpeechEntry objects.

@@ -1,6 +1,7 @@
 package mouth
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -176,21 +177,48 @@ func (mouth *Mouth) Start(applicationContext context.Context) {
 		return
 	}
 
+	playbackQueue := make(chan chan synthesizedChunk, 100)
+
+	// Spawn the playback loop
+	go func() {
+		for future := range playbackQueue {
+			chunk := <-future
+			fmt.Printf("Mouth Playback: Playing chunk: Done=%v, len=%d\n", chunk.Done, len(chunk.PCMData))
+			if len(chunk.PCMData) > 0 {
+				audioStartTime := time.Now()
+				mouth.Runtime.Playback.Mutex.Lock()
+				pipeWriter.Write(chunk.PCMData)
+				mouth.Runtime.Playback.Mutex.Unlock()
+				chunk.Profile.AddSpan("Audio_Finish_Chunk", time.Since(audioStartTime))
+			}
+			if chunk.Done {
+				time.Sleep(500 * time.Millisecond)
+				mouth.Configuration.State.Language.CoordinateSpeaking(false)
+				fmt.Printf("[PROFILER] %s\n", chunk.Profile.Summary())
+			}
+		}
+	}()
+
 	for {
-		if mouth.handleNextEntry(applicationContext, pipeWriter, playbackCommand) {
+		if mouth.handleNextEntry(applicationContext, playbackQueue) {
+			pipeWriter.Close()
+			playbackCommand.Wait()
+			close(playbackQueue)
 			return
 		}
 	}
 }
 
-func (mouth *Mouth) handleNextEntry(applicationContext context.Context, pipeWriter *io.PipeWriter, playbackCommand *exec.Cmd) bool {
+func (mouth *Mouth) handleNextEntry(applicationContext context.Context, playbackQueue chan chan synthesizedChunk) bool {
 	select {
 	case entry := <-mouth.Runtime.Data.BrainToMouth:
-		go mouth.processEntry(applicationContext, entry, pipeWriter)
+		fmt.Printf("Mouth: Queued future for sentence: %q (Done=%v)\n", entry.Chunk.Details.Text, entry.Chunk.Done)
+		mouth.Configuration.State.Language.CoordinateSpeaking(true)
+		future := make(chan synthesizedChunk, 1)
+		playbackQueue <- future
+		go mouth.synthesizeEntry(applicationContext, entry, future)
 		return false
 	case <-applicationContext.Done():
-		pipeWriter.Close()
-		playbackCommand.Wait()
 		return true
 	}
 }
@@ -235,36 +263,63 @@ func (mouth *Mouth) startLivePlaybackCommand(applicationContext context.Context,
 	return command
 }
 
-func (mouth *Mouth) processEntry(applicationContext context.Context, entry common.LLMEntry, pipeWriter io.Writer) {
-	if entry.Chunk.Details.Text == "" || pipeWriter == nil {
-		if entry.Chunk.Done {
-			time.Sleep(500 * time.Millisecond)
-			mouth.Configuration.State.Language.CoordinateSpeaking(false)
-		}
+type synthesizedChunk struct {
+	PCMData []byte
+	Done    bool
+	Profile *common.Profile
+}
+
+func (mouth *Mouth) synthesizeEntry(applicationContext context.Context, entry common.LLMEntry, future chan<- synthesizedChunk) {
+	profile := entry.Context.Profile
+	if entry.Chunk.Details.Text == "" {
+		future <- synthesizedChunk{PCMData: nil, Done: entry.Chunk.Done, Profile: profile}
 		return
 	}
-
-	mouth.Configuration.State.Language.CoordinateSpeaking(true)
-	defer mouth.finalizeEntry(entry)
 
 	ttsStart := time.Now()
 	audioData, fetchError := mouth.fetchAudioFromKokoro(applicationContext, entry)
 	if fetchError != nil {
 		fmt.Printf("Kokoro Error: %v\n", fetchError)
+		future <- synthesizedChunk{PCMData: nil, Done: entry.Chunk.Done, Profile: profile}
 		return
 	}
 	defer audioData.Close()
-	entry.Context.Profile.AddSpan("TTS_Synthesis", time.Since(ttsStart))
+	profile.AddSpan("TTS_Synthesis", time.Since(ttsStart))
 
-	mouth.playAudio(applicationContext, audioData, entry.Context.Profile, pipeWriter)
+	pcmBytes, err := mouth.processAudioWithFFmpeg(applicationContext, audioData, profile)
+	if err != nil {
+		fmt.Printf("FFmpeg Error: %v\n", err)
+		future <- synthesizedChunk{PCMData: nil, Done: entry.Chunk.Done, Profile: profile}
+		return
+	}
+
+	future <- synthesizedChunk{PCMData: pcmBytes, Done: entry.Chunk.Done, Profile: profile}
 }
 
-func (mouth *Mouth) finalizeEntry(entry common.LLMEntry) {
-	if entry.Chunk.Done {
-		time.Sleep(500 * time.Millisecond)
-		mouth.Configuration.State.Language.CoordinateSpeaking(false)
-		fmt.Printf("[PROFILER] %s\n", entry.Context.Profile.Summary())
+func (mouth *Mouth) processAudioWithFFmpeg(applicationContext context.Context, reader io.Reader, profile *common.Profile) ([]byte, error) {
+	audioStartTime := time.Now()
+	filterChain := mouth.BuildFilterChain(mouth.Configuration.Settings.ActiveConfig)
+	conversionCommand := exec.CommandContext(applicationContext, "ffmpeg", "-threads", "1", "-i", "pipe:0", "-af", filterChain, "-f", "s16le", "-ar", "24000", "-ac", "1", "pipe:1", "-v", "error")
+	conversionCommand.Stdin = reader
+
+	stdout, pipeError := conversionCommand.StdoutPipe()
+	if pipeError != nil {
+		return nil, fmt.Errorf("failed to create stdout pipe: %w", pipeError)
 	}
+
+	if startError := conversionCommand.Start(); startError != nil {
+		return nil, fmt.Errorf("failed to start ffmpeg: %w", startError)
+	}
+
+	var pcmBuffer bytes.Buffer
+	monitor := &latencyMonitor{reader: stdout, profile: profile, startTime: audioStartTime}
+	_, copyError := io.Copy(&pcmBuffer, monitor)
+	if copyError != nil {
+		return nil, fmt.Errorf("failed to copy output: %w", copyError)
+	}
+
+	conversionCommand.Wait()
+	return pcmBuffer.Bytes(), nil
 }
 
 func (mouth *Mouth) fetchAudioFromKokoro(applicationContext context.Context, entry common.LLMEntry) (io.ReadCloser, error) {
@@ -328,32 +383,7 @@ func (mouth *Mouth) getCurrentLanguage() common.Language {
 	return common.LanguageEnglish
 }
 
-func (mouth *Mouth) playAudio(applicationContext context.Context, reader io.Reader, profile *common.Profile, pipeWriter io.Writer) {
-	if reader == nil || pipeWriter == nil { return }
-	audioStartTime := time.Now()
-	filterChain := mouth.BuildFilterChain(mouth.Configuration.Settings.ActiveConfig)
-	conversionCommand := exec.CommandContext(applicationContext, "ffmpeg", "-threads", "1", "-i", "pipe:0", "-af", filterChain, "-f", "s16le", "-ar", "24000", "-ac", "1", "pipe:1", "-v", "error")
-	conversionCommand.Stdin = reader
-	stdout, pipeError := conversionCommand.StdoutPipe()
-	if pipeError != nil {
-		fmt.Printf("Mouth Error: Failed to create stdout pipe: %v\n", pipeError)
-		return
-	}
 
-	if startError := conversionCommand.Start(); startError != nil {
-		fmt.Printf("Mouth Error: Failed to start ffmpeg: %v\n", startError)
-		return
-	}
-
-	monitor := &latencyMonitor{reader: stdout, profile: profile, startTime: audioStartTime}
-	
-	mouth.Runtime.Playback.Mutex.Lock()
-	io.Copy(pipeWriter, monitor)
-	mouth.Runtime.Playback.Mutex.Unlock()
-	
-	conversionCommand.Wait()
-	profile.AddSpan("Audio_Finish_Chunk", time.Since(audioStartTime))
-}
 
 type latencyMonitor struct {
 	reader    io.Reader
