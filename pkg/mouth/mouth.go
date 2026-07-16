@@ -253,7 +253,14 @@ func (mouth *Mouth) startTestPlaybackCommand(applicationContext context.Context,
 }
 
 func (mouth *Mouth) startLivePlaybackCommand(applicationContext context.Context, reader io.Reader) *exec.Cmd {
-	arguments := []string{"--playback", "--format=s16le", "--channels=1", "--rate=24000", "--property=application.name=Mitsu_Mouth"}
+	arguments := []string{
+		"--playback",
+		"--format=s16le",
+		"--channels=1",
+		"--rate=24000",
+		"--property=application.name=Mitsu_Mouth",
+		"--latency-msec=300",
+	}
 	outputDevice := string(mouth.Configuration.State.Device.OutputName)
 	if outputDevice != "" {
 		arguments = append(arguments, "-d", outputDevice)
