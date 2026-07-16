@@ -238,6 +238,7 @@ func (mouth *Mouth) startLivePlaybackCommand(applicationContext context.Context,
 func (mouth *Mouth) processEntry(applicationContext context.Context, entry common.LLMEntry, pipeWriter io.Writer) {
 	if entry.Chunk.Details.Text == "" || pipeWriter == nil {
 		if entry.Chunk.Done {
+			time.Sleep(500 * time.Millisecond)
 			mouth.Configuration.State.Language.CoordinateSpeaking(false)
 		}
 		return
@@ -260,6 +261,7 @@ func (mouth *Mouth) processEntry(applicationContext context.Context, entry commo
 
 func (mouth *Mouth) finalizeEntry(entry common.LLMEntry) {
 	if entry.Chunk.Done {
+		time.Sleep(500 * time.Millisecond)
 		mouth.Configuration.State.Language.CoordinateSpeaking(false)
 		fmt.Printf("[PROFILER] %s\n", entry.Context.Profile.Summary())
 	}
