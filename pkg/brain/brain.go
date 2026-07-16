@@ -378,9 +378,9 @@ func (brain *Brain) buildActiveMessages(entry common.SpeechEntry) []ChatMessage 
 
 	if len(entry.Details.Audio) > 0 {
 		base64Audio := base64.StdEncoding.EncodeToString(entry.Details.Audio)
-		prompt := "Listen and respond directly to this speech as Mitsu. You MUST format your response exactly in JSON structure: {\"user_speech\": \"[exactly transcribe what you heard the user say]\", \"response\": \"[your sarcastic response here]\"}"
+		prompt := "Listen and respond directly to this speech as Mitsu."
 		if entry.Details.Language == common.LanguagePortuguese {
-			prompt = "Escute e responda diretamente a esta fala como Mitsu. Você DEVE formatar sua resposta exatamente na estrutura JSON: {\"user_speech\": \"[transcreva exatamente o que ouviu o usuário falar]\", \"response\": \"[sua resposta sarcástica aqui]\"}"
+			prompt = "Escute e responda diretamente a esta fala como Mitsu."
 		}
 		messages[len(messages)-1] = ChatMessage{
 			Role:    RoleUser,
