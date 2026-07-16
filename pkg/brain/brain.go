@@ -91,6 +91,7 @@ type ChatMessage struct {
 type OllamaChatRequest struct {
 	Model    string        `json:"model"`
 	Messages []ChatMessage `json:"messages"`
+	Format   string        `json:"format,omitempty"`
 	Stream   bool          `json:"stream"`
 }
 
@@ -349,6 +350,7 @@ func (brain *Brain) processRequest(applicationContext context.Context, entry com
 	requestBody, _ := json.Marshal(OllamaChatRequest{
 		Model:    modelName,
 		Messages: messages,
+		Format:   "json",
 		Stream:   true,
 	})
 
@@ -373,9 +375,9 @@ func (brain *Brain) buildActiveMessages(entry common.SpeechEntry) []ChatMessage 
 
 	if len(entry.Details.Audio) > 0 {
 		base64Audio := base64.StdEncoding.EncodeToString(entry.Details.Audio)
-		prompt := "Listen and respond directly to this speech as Mitsu. You MUST format your response exactly as: <user_speech>[exactly transcribe what the user said]</user_speech><response>[your sarcastic response here]</response>"
+		prompt := "Listen and respond directly to this speech as Mitsu. You MUST format your response exactly in JSON structure: {\"user_speech\": \"[exactly transcribe what you heard the user say]\", \"response\": \"[your sarcastic response here]\"}"
 		if entry.Details.Language == common.LanguagePortuguese {
-			prompt = "Escute e responda diretamente a esta fala como Mitsu. Você DEVE formatar sua resposta exatamente como: <user_speech>[transcreva exatamente o que ouviu o usuário falar]</user_speech><response>[sua resposta sarcástica aqui]</response>"
+			prompt = "Escute e responda diretamente a esta fala como Mitsu. Você DEVE formatar sua resposta exatamente na estrutura JSON: {\"user_speech\": \"[transcreva exatamente o que ouviu o usuário falar]\", \"response\": \"[sua resposta sarcástica aqui]\"}"
 		}
 		messages[len(messages)-1] = ChatMessage{
 			Role:    RoleUser,
@@ -521,15 +523,29 @@ func (brain *Brain) notifyUI(text, messageType string) {
 }
 
 func (brain *Brain) extractResponseText(fullOutput string) string {
-	startIndex := strings.Index(fullOutput, "<response>")
-	if startIndex < 0 {
+	var responseMap map[string]interface{}
+	if err := json.Unmarshal([]byte(fullOutput), &responseMap); err == nil {
+		if resp, ok := responseMap["response"].(string); ok {
+			return resp
+		}
+	}
+
+	responseKey := "\"response\""
+	responseIndex := strings.Index(fullOutput, responseKey)
+	if responseIndex < 0 {
 		return fullOutput
 	}
-	endIndex := strings.Index(fullOutput, "</response>")
-	if endIndex > startIndex {
-		return fullOutput[startIndex+len("<response>"):endIndex]
+	remainder := fullOutput[responseIndex+len(responseKey):]
+	firstQuote := strings.Index(remainder, "\"")
+	if firstQuote >= 0 {
+		valPart := remainder[firstQuote+1:]
+		secondQuote := findNonEscapedQuote(valPart)
+		if secondQuote >= 0 {
+			return valPart[:secondQuote]
+		}
+		return valPart
 	}
-	return fullOutput[startIndex+len("<response>"):]
+	return fullOutput
 }
 
 func (brain *Brain) parseStream(tokens <-chan string, entry common.SpeechEntry) <-chan string {
@@ -537,63 +553,100 @@ func (brain *Brain) parseStream(tokens <-chan string, entry common.SpeechEntry) 
 
 	go func() {
 		defer close(parsedChannel)
-		var totalOutput strings.Builder
-		inUserSpeech := false
-		inResponse := false
+		var accumulated strings.Builder
+		state := 0 // 0: before user_speech, 1: in user_speech, 2: before response, 3: in response, 4: done
 		var userSpeech strings.Builder
-		tokenCount := 0
-		fallbackMode := false
 
 		for token := range tokens {
-			tokenCount++
-			if !fallbackMode && !inUserSpeech && !inResponse && tokenCount > 15 {
-				fallbackMode = true
-				parsedChannel <- totalOutput.String()
-			}
+			accumulated.WriteString(token)
+			currentText := accumulated.String()
 
-			if fallbackMode {
-				parsedChannel <- token
-				continue
-			}
-
-			totalOutput.WriteString(token)
-			currentText := totalOutput.String()
-
-			if strings.Contains(currentText, "<user_speech>") && !inUserSpeech && !inResponse {
-				inUserSpeech = true
-			}
-			if strings.Contains(currentText, "</user_speech>") && inUserSpeech {
-				inUserSpeech = false
-				startIndex := strings.Index(currentText, "<user_speech>") + len("<user_speech>")
-				endIndex := strings.Index(currentText, "</user_speech>")
-				if startIndex >= 0 && endIndex > startIndex {
-					userSpeechText := currentText[startIndex:endIndex]
-					userSpeech.Reset()
+			switch state {
+			case 0:
+				userSpeechIndex := strings.Index(currentText, "\"user_speech\"")
+				if userSpeechIndex >= 0 {
+					remainder := currentText[userSpeechIndex+len("\"user_speech\""):]
+					firstQuote := strings.Index(remainder, "\"")
+					if firstQuote >= 0 {
+						state = 1
+						accumulated.Reset()
+						accumulated.WriteString(remainder[firstQuote+1:])
+					}
+				}
+			case 1:
+				closingQuoteIndex := findNonEscapedQuote(currentText)
+				if closingQuoteIndex >= 0 {
+					userSpeechText := currentText[:closingQuoteIndex]
 					userSpeech.WriteString(userSpeechText)
-					brain.updateLastUserMessage(userSpeechText)
+					brain.updateLastUserMessage(userSpeech.String())
+					state = 2
+					accumulated.Reset()
+					accumulated.WriteString(currentText[closingQuoteIndex+1:])
 				}
-			}
-			if strings.Contains(currentText, "<response>") && !inResponse {
-				inResponse = true
-				responseTagIndex := strings.Index(currentText, "<response>")
-				textAfterTag := currentText[responseTagIndex+len("<response>"):]
-				if textAfterTag != "" {
-					parsedChannel <- textAfterTag
+			case 2:
+				responseIndex := strings.Index(currentText, "\"response\"")
+				if responseIndex >= 0 {
+					remainder := currentText[responseIndex+len("\"response\""):]
+					firstQuote := strings.Index(remainder, "\"")
+					if firstQuote >= 0 {
+						state = 3
+						accumulated.Reset()
+						immediateText := remainder[firstQuote+1:]
+						cleanText := brain.cleanTrailingJson(immediateText)
+						if cleanText != "" {
+							parsedChannel <- cleanText
+						}
+					}
 				}
-				continue
-			}
-			if inResponse {
-				if strings.Contains(token, "</response>") {
-					cleanToken := strings.ReplaceAll(token, "</response>", "")
-					parsedChannel <- cleanToken
-					inResponse = false
-					continue
+			case 3:
+				closingQuoteIndex := findNonEscapedQuote(currentText)
+				if closingQuoteIndex >= 0 {
+					lastPart := currentText[:closingQuoteIndex]
+					cleanText := brain.cleanTrailingJson(lastPart)
+					if cleanText != "" {
+						parsedChannel <- cleanText
+					}
+					state = 4
+					accumulated.Reset()
 				}
-				parsedChannel <- token
+				if closingQuoteIndex < 0 {
+					cleanText := brain.cleanTrailingJson(token)
+					if cleanText != "" {
+						parsedChannel <- cleanText
+					}
+				}
 			}
 		}
 	}()
 	return parsedChannel
+}
+
+func findNonEscapedQuote(s string) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '"' {
+			if !isEscaped(s, i) {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func isEscaped(s string, index int) bool {
+	escaped := false
+	for j := index - 1; j >= 0 && s[j] == '\\'; j-- {
+		escaped = !escaped
+	}
+	return escaped
+}
+
+func (brain *Brain) cleanTrailingJson(text string) string {
+	text = strings.ReplaceAll(text, "\\\"", "\"")
+	text = strings.ReplaceAll(text, "\\n", "\n")
+	text = strings.ReplaceAll(text, "\\t", "\t")
+	text = strings.ReplaceAll(text, "\"", "")
+	text = strings.ReplaceAll(text, "}", "")
+	return text
 }
 
 func (brain *Brain) updateLastUserMessage(actualText string) {
