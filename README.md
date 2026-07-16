@@ -62,3 +62,9 @@ Mitsu includes a bridge for **mGBA** integration, intended to allow her to inter
 
 *   **Gaming Bridge (`pkg/gaming`)**: A TCP bridge for communicating with emulators.
 *   **mGBA Script (`scripts/pokemon_bridge.lua`)**: A Lua script intended to read game state and execute commands.
+
+## 🔮 Future Improvements
+
+*   **Eye Module (`pkg/eye`)**: Integrate a real-time vision processing routine to capture screenshots, active windows, or webcam streams. This will leverage the unified multimodal vision capabilities of the underlying `gemma4` model, allowing Mitsu to "see" your gameplay, code, or environment and comment on it in real-time.
+*   **Automatic Language Switching**: Allow Mitsu to dynamically switch between English and Portuguese during a session instead of requiring a container restart with `MITSU_LANG`.
+*   **Active Gaming Integration**: Finalize the mGBA scripting bridge to allow Mitsu to play and react to retro games interactively.
