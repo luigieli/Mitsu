@@ -451,21 +451,29 @@ func (aggregator *sentenceAggregator) Add(token string) {
 	}
 
 	currentText := aggregator.buffer.String()
-	if len(currentText) < 10 {
-		return
-	}
-
 	sentences := SplitSentences(currentText)
-	if len(sentences) <= 1 {
-		return
-	}
-
-	for _, sentence := range sentences[:len(sentences)-1] {
-		aggregator.onSentence(sentence)
+	
+	var incompletePart strings.Builder
+	for _, sentence := range sentences {
+		trimmed := strings.TrimSpace(sentence)
+		if trimmed == "" {
+			continue
+		}
+		
+		lastChar := trimmed[len(trimmed)-1]
+		if lastChar == '.' || lastChar == '?' || lastChar == '!' {
+			aggregator.onSentence(trimmed)
+			continue
+		}
+		
+		if incompletePart.Len() > 0 {
+			incompletePart.WriteString(" ")
+		}
+		incompletePart.WriteString(trimmed)
 	}
 	
 	aggregator.buffer.Reset()
-	aggregator.buffer.WriteString(sentences[len(sentences)-1])
+	aggregator.buffer.WriteString(incompletePart.String())
 }
 
 func (aggregator *sentenceAggregator) FlushRemaining() string {
