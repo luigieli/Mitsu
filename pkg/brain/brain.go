@@ -331,6 +331,9 @@ func (brain *Brain) processRequest(applicationContext context.Context, entry com
 	brain.logProcessing(entry)
 	brain.notifyUI(ThinkingStatusMessage, UIMessageTypeStatus)
 
+	// Silence the Ear immediately during thinking phase
+	brain.Configuration.State.Language.CoordinateSpeaking(true)
+
 	userMsg := ChatMessage{
 		Role:    RoleUser,
 		Content: string(entry.Details.Text),
@@ -362,6 +365,7 @@ func (brain *Brain) processRequest(applicationContext context.Context, entry com
 	response, ollamaError := http.DefaultClient.Do(request)
 	if ollamaError != nil {
 		fmt.Printf("Brain Error: %v\n", ollamaError)
+		brain.Configuration.State.Language.CoordinateSpeaking(false)
 		return
 	}
 	defer response.Body.Close()
@@ -403,6 +407,7 @@ func (brain *Brain) updateHistory(message ChatMessage) {
 func (brain *Brain) streamResponse(response *http.Response, entry common.SpeechEntry, brainStart time.Time) {
 	if response.StatusCode != http.StatusOK {
 		fmt.Printf("Brain Error: Ollama returned status %d\n", response.StatusCode)
+		brain.Configuration.State.Language.CoordinateSpeaking(false)
 		return
 	}
 
@@ -570,19 +575,31 @@ func (brain *Brain) parseStream(tokens <-chan string, entry common.SpeechEntry) 
 					if firstQuote >= 0 {
 						state = 1
 						accumulated.Reset()
-						accumulated.WriteString(remainder[firstQuote+1:])
+						tokenRemainder := remainder[firstQuote+1:]
+						closingIndex := findNonEscapedQuote(tokenRemainder)
+						if closingIndex >= 0 {
+							userSpeechText := tokenRemainder[:closingIndex]
+							userSpeech.WriteString(userSpeechText)
+							brain.updateLastUserMessage(userSpeech.String())
+							state = 2
+							accumulated.WriteString(tokenRemainder[closingIndex+1:])
+							continue
+						}
+						userSpeech.WriteString(tokenRemainder)
 					}
 				}
 			case 1:
-				closingQuoteIndex := findNonEscapedQuote(currentText)
+				closingQuoteIndex := findNonEscapedQuote(token)
 				if closingQuoteIndex >= 0 {
-					userSpeechText := currentText[:closingQuoteIndex]
-					userSpeech.WriteString(userSpeechText)
+					lastPart := token[:closingQuoteIndex]
+					userSpeech.WriteString(lastPart)
 					brain.updateLastUserMessage(userSpeech.String())
 					state = 2
 					accumulated.Reset()
-					accumulated.WriteString(currentText[closingQuoteIndex+1:])
+					accumulated.WriteString(token[closingQuoteIndex+1:])
+					continue
 				}
+				userSpeech.WriteString(token)
 			case 2:
 				responseIndex := strings.Index(currentText, "\"response\"")
 				if responseIndex >= 0 {
@@ -591,29 +608,38 @@ func (brain *Brain) parseStream(tokens <-chan string, entry common.SpeechEntry) 
 					if firstQuote >= 0 {
 						state = 3
 						accumulated.Reset()
-						immediateText := remainder[firstQuote+1:]
-						cleanText := brain.cleanTrailingJson(immediateText)
+						tokenRemainder := remainder[firstQuote+1:]
+						closingIndex := findNonEscapedQuote(tokenRemainder)
+						if closingIndex >= 0 {
+							lastPart := tokenRemainder[:closingIndex]
+							cleanText := brain.cleanTrailingJson(lastPart)
+							if cleanText != "" {
+								parsedChannel <- cleanText
+							}
+							state = 4
+							continue
+						}
+						cleanText := brain.cleanTrailingJson(tokenRemainder)
 						if cleanText != "" {
 							parsedChannel <- cleanText
 						}
 					}
 				}
 			case 3:
-				closingQuoteIndex := findNonEscapedQuote(currentText)
+				closingQuoteIndex := findNonEscapedQuote(token)
 				if closingQuoteIndex >= 0 {
-					lastPart := currentText[:closingQuoteIndex]
+					lastPart := token[:closingQuoteIndex]
 					cleanText := brain.cleanTrailingJson(lastPart)
 					if cleanText != "" {
 						parsedChannel <- cleanText
 					}
 					state = 4
 					accumulated.Reset()
+					continue
 				}
-				if closingQuoteIndex < 0 {
-					cleanText := brain.cleanTrailingJson(token)
-					if cleanText != "" {
-						parsedChannel <- cleanText
-					}
+				cleanText := brain.cleanTrailingJson(token)
+				if cleanText != "" {
+					parsedChannel <- cleanText
 				}
 			}
 		}

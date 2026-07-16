@@ -236,7 +236,12 @@ func (mouth *Mouth) startLivePlaybackCommand(applicationContext context.Context,
 }
 
 func (mouth *Mouth) processEntry(applicationContext context.Context, entry common.LLMEntry, pipeWriter io.Writer) {
-	if entry.Chunk.Details.Text == "" || pipeWriter == nil { return }
+	if entry.Chunk.Details.Text == "" || pipeWriter == nil {
+		if entry.Chunk.Done {
+			mouth.Configuration.State.Language.CoordinateSpeaking(false)
+		}
+		return
+	}
 
 	mouth.Configuration.State.Language.CoordinateSpeaking(true)
 	defer mouth.finalizeEntry(entry)
