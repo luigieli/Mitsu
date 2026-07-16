@@ -63,7 +63,7 @@ dev: mic-setup
 
 setup-model:
 	@echo "Creating Mitsu persona in Ollama..."
-	docker-compose exec -T ollama ollama pull gemma4:e2b || true
+	docker-compose exec -T ollama ollama pull gemma4:e4b || true
 	docker-compose cp Modelfile ollama:/Modelfile
 	docker-compose exec -T ollama ollama create mitsu -f /Modelfile
 
